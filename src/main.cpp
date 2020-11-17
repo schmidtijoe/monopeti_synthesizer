@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Adafruit_MCP23017.h>
 #include <elapsedMillis.h>
+#include <Audio.h>
 
 // global defs
 #define MCP_KEYS_ADDRESS 0
@@ -10,6 +11,8 @@
 Adafruit_MCP23017 mcp_keys;
 byte half_vel = 90;
 
+// teensy audio system design tool code
+AudioControlSGTL5000    sgtl5000_1;
 // declare Note structure, micros or elapsed micros here?!?!
 struct Note {
     bool push_state;
