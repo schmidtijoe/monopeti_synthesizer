@@ -4,8 +4,9 @@
 #include <Audio.h>
 
 // global defs
-#define MCP_KEYS_ADDRESS 0
-#define no_of_keys 64
+constexpr uint8_t MCP_KEYS_ADDRESS = 0;
+constexpr uint8_t no_of_keys = 64;
+constexpr unsigned int a_read_res = 16;
 
 // global vars
 Adafruit_MCP23017 mcp_keys;
