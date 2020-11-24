@@ -18,14 +18,22 @@ byte velocity;
 AudioControlSGTL5000    sgtl5000_1;
 // declare Note structure, micros or elapsed micros here?!?!
 
-struct Note {
+class Note {
+public:
     bool push_state;
     byte note_value;
     byte velocity_value;
     elapsedMicros last_press_timer;
-};
 
-Note notes[no_of_keys];
+    // constructor
+    Note() = default;
+    Note(bool state, byte no_val, byte vel_val) {
+        push_state = state;
+        note_value = no_val;
+        velocity_value = vel_val;
+    }
+};
+Note* notes = new Note[no_of_keys];
 
 // initialize
 void init_key_notes() {
@@ -34,43 +42,34 @@ void init_key_notes() {
      * each identifier is mapped to a note and velocity value
      * start time and logic value are initialized with 0
      */
+
     for (int out_idx = 0; out_idx < 8; out_idx++) {
         for (int in_idx = 0; in_idx < 8; in_idx++) {
             int idx = 8 * out_idx + in_idx;
-            notes[idx].push_state = false;
-            notes[idx].last_press_timer = 0;
             switch (out_idx) {
                 case 0:
-                    notes[idx].velocity_value = half_vel;
-                    notes[idx].note_value = 56 + in_idx;
+                    notes[idx] = Note(false, 56 + in_idx, half_vel);
                     break;
                 case 1:
-                    notes[idx].velocity_value = half_vel;
-                    notes[idx].note_value = 64 + in_idx;
+                    notes[idx] = Note(false, 64 + in_idx, half_vel);
                     break;
                 case 2:
-                    notes[idx].velocity_value = half_vel;
-                    notes[idx].note_value = 48 + in_idx;
+                    notes[idx] = Note(false, 48 + in_idx, half_vel);
                     break;
                 case 3:
-                    notes[idx].velocity_value = 127;
-                    notes[idx].note_value = 48 + in_idx;
+                    notes[idx] = Note(false, 48 + in_idx, 127);
                     break;
                 case 4:
-                    notes[idx].velocity_value = 127;
-                    notes[idx].note_value = 56 + in_idx;
+                    notes[idx] = Note(false, 56 + in_idx, 127);
                     break;
                 case 5:
-                    notes[idx].velocity_value = 127;
-                    notes[idx].note_value = 64 + in_idx;
+                    notes[idx] = Note(false, 64 + in_idx, 127);
                     break;
                 case 6:
-                    notes[idx].velocity_value = 127;
-                    notes[idx].note_value = 72 + in_idx;
+                    notes[idx] = Note(false, 72 + in_idx, 127);
                     break;
                 case 7:
-                    notes[idx].velocity_value = half_vel;
-                    notes[idx].note_value = 72 + in_idx;
+                    notes[idx] = Note(false, 72 + in_idx, half_vel);
                     break;
             }
         }
@@ -99,21 +98,16 @@ void keybed_read() {
                 }
                 else {
                     notes[total_idx].last_press_timer = 0;
-                    int note_compare;
+                    int note_compare = 0;
                     unsigned int note_compare_timer = 200000;  // basically ignores notes pressed for 200 sek :D
                     for (int search_idx = 0; search_idx < no_of_keys && search_idx != total_idx; search_idx++) {
-                        // look for notes till pressed:
+                        // look for notes still pressed:
                         if (notes[search_idx].push_state) {
                             // find the one with shortest last press duration
                             if (notes[search_idx].last_press_timer < note_compare_timer) {
                                 note_compare = notes[search_idx].note_value;
                                 note_compare_timer = notes[search_idx].last_press_timer;
                             }
-                        }
-                        else {
-                            // send key off (for midi)
-                            note = 0;
-                            velocity = 0;
                         }
                     }
                 }
