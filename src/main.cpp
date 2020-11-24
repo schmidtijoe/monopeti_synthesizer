@@ -4,23 +4,28 @@
 #include <Audio.h>
 
 // global defs
-constexpr uint8_t MCP_KEYS_ADDRESS = 0;
-constexpr uint8_t no_of_keys = 64;
-constexpr unsigned int a_read_res = 16;
+#define no_of_keys 64
+#define a_read_res 10  // bit depth of reading resolution
 
 // global vars
 Adafruit_MCP23017 mcp_keys;
 byte half_vel = 90;
+int res_range = (int)(2 << a_read_res) - 1;  // analod reading range, dependent on bit depth
+byte note;
+byte velocity;
 
 // teensy audio system design tool code
 AudioControlSGTL5000    sgtl5000_1;
 // declare Note structure, micros or elapsed micros here?!?!
+
 struct Note {
     bool push_state;
     byte note_value;
     byte velocity_value;
-    elapsedMicros start_time;
-} notes[no_of_keys];
+    elapsedMicros last_press_timer;
+};
+
+Note notes[no_of_keys];
 
 // initialize
 void init_key_notes() {
@@ -33,7 +38,7 @@ void init_key_notes() {
         for (int in_idx = 0; in_idx < 8; in_idx++) {
             int idx = 8 * out_idx + in_idx;
             notes[idx].push_state = false;
-            notes[idx].start_time = 0;
+            notes[idx].last_press_timer = 0;
             switch (out_idx) {
                 case 0:
                     notes[idx].velocity_value = half_vel;
@@ -85,13 +90,33 @@ void keybed_read() {
             total_idx = (out_idx - 8) * 8 + in_idx;
             key_state = mcp_keys.digitalRead(in_idx);
             if (key_state != notes[total_idx].push_state) {
+                notes[total_idx].push_state = key_state;
                 if (key_state) {
                     // set starting time when note pressed
-                    // send key on?
-                    notes[total_idx].start_time = elapsedMicros();
+                    note = notes[total_idx].note_value;
+                    velocity = notes[total_idx].velocity_value;
+                    notes[total_idx].last_press_timer = elapsedMicros();
                 }
-                else // send key off?
-                notes[total_idx].push_state = key_state;
+                else {
+                    notes[total_idx].last_press_timer = 0;
+                    int note_compare;
+                    unsigned int note_compare_timer = 200000;  // basically ignores notes pressed for 200 sek :D
+                    for (int search_idx = 0; search_idx < no_of_keys && search_idx != total_idx; search_idx++) {
+                        // look for notes till pressed:
+                        if (notes[search_idx].push_state) {
+                            // find the one with shortest last press duration
+                            if (notes[search_idx].last_press_timer < note_compare_timer) {
+                                note_compare = notes[search_idx].note_value;
+                                note_compare_timer = notes[search_idx].last_press_timer;
+                            }
+                        }
+                        else {
+                            // send key off (for midi)
+                            note = 0;
+                            velocity = 0;
+                        }
+                    }
+                }
             }
         }
     }
@@ -107,7 +132,7 @@ void setup() {
     init_key_notes();
 
     // initialize mcps
-    mcp_keys.begin(MCP_KEYS_ADDRESS);
+    mcp_keys.begin();
     for (int out_idx=8; out_idx<=15; out_idx++) {
         mcp_keys.pinMode(out_idx, OUTPUT);
         mcp_keys.digitalWrite(out_idx, LOW);
