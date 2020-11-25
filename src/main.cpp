@@ -20,7 +20,7 @@ AudioControlSGTL5000    sgtl5000_1;
 
 class Note {
 public:
-    Note() : push_state(false), note_value(0), velocity_value(0), last_press_timer(){};
+    Note() : push_state(false), note_value(0), velocity_value(0), last_press_timer(0){};
 
     void setNoteValues(byte no_val, byte vel_val) {
 		note_value = no_val;
@@ -60,7 +60,7 @@ public:
 		}
 	}
 
-	elapsedMicros getTimer() const
+	elapsedMicros getTime() const
 	{
 		return last_press_timer;
 	}
@@ -158,7 +158,7 @@ void play_note()
     // Find the key that was pressed latest. Basically, this finds the key that is pressed which has
     // the minimal timer-value.
     for (const auto & note : notes) {
-        if (note.isPressed() && note_to_play.getTimer() > note.getTimer()) {
+        if (note.isPressed() && (!note_to_play.isPressed() || note_to_play.getTime() < note.getTime())) {
             note_to_play = note;
         }
     }
