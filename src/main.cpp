@@ -6,80 +6,87 @@
 // We don't use defines anymore, because these are just "text replacements". Instead, we use
 // compile-time values that have a type and can be checked properly. The compiler will optimize
 // this heavily, so there is no runtime overhead.
+
 constexpr u_int8_t no_of_keys = 64;
 constexpr u_int8_t a_read_res = 10;  // bit depth of reading resolution
 constexpr byte half_vel = 90;
 
 // global vars
 Adafruit_MCP23017 mcp_keys;
-int res_range = (int)(2 << a_read_res) - 1;  // analog reading range, dependent on bit depth
+
+int res_range = (int) (2 << a_read_res) - 1;  // analog reading range, dependent on bit depth
 
 // teensy audio system design tool code
-AudioControlSGTL5000    sgtl5000_1;
-// declare Note structure, micros or elapsed micros here?!?!
+AudioControlSGTL5000 sgtl5000_1;
 
-class Note {
+class Note
+{
 public:
-    Note() : push_state(false), note_value(0), velocity_value(0), last_press_timer(0){};
+    Note()
+        : push_state(false), note_value(0), velocity_value(0), last_press_timer(0)
+    {};
 
-    void setNoteValues(byte no_val, byte vel_val) {
-		note_value = no_val;
-		velocity_value = vel_val;
+    void setNoteValues(byte no_val, byte vel_val)
+    {
+        note_value = no_val;
+        velocity_value = vel_val;
     }
 
     // We declare this method "const" because it doesn't "change" the note object. It
     // just returns information.
-    bool isPressed() const {
-    	return push_state;
+    bool isPressed() const
+    {
+        return push_state;
     }
 
-	void setPush(bool state) {
-    	/** If we already have the new state, which means either a key was pressed before and
-    	 * is still pressed now, or a key was not pressed before and is not pressed now either,
-    	 * then we simply do nothing.
-    	 */
-		if (state == push_state) {
-			return;
-		}
+    void setPush(bool state)
+    {
+        /** If we already have the new state, which means either a key was pressed before and
+         * is still pressed now, or a key was not pressed before and is not pressed now either,
+         * then we simply do nothing.
+         */
+        if (state == push_state) {
+            return;
+        }
 
-		// Now, we are sure that the state of the key has changed...
-		push_state = state;
+        // Now, we are sure that the state of the key has changed...
+        push_state = state;
 
-		/**
-		 * ... that means if the key is pressed now, we not only set its state to true, but
-		 * we also start the timer on it.
-		 */
-		if (push_state) {
-			last_press_timer = elapsedMicros();
-		}
-		/**
-		 * Otherwise, when the key was released, we reset the timer to 0
-		 */
-		else {
-			last_press_timer = 0;
-		}
-	}
+        /**
+         * ... that means if the key is pressed now, we not only set its state to true, but
+         * we also start the timer on it.
+         */
+        if (push_state) {
+            last_press_timer = elapsedMicros();
+        }
+            /**
+             * Otherwise, when the key was released, we reset the timer to 0
+             */
+        else {
+            last_press_timer = 0;
+        }
+    }
 
-	elapsedMicros getTime() const
-	{
-		return last_press_timer;
-	}
+    elapsedMicros getTime() const
+    {
+        return last_press_timer;
+    }
 
     byte get_note() const
     {
         return note_value;
     }
-    
+
     byte get_velocity() const
     {
         return velocity_value;
     }
 
 private:
-	bool push_state;
-	byte note_value;
+    bool push_state;
+    byte note_value;
     byte velocity_value;
-	elapsedMicros last_press_timer;
+    elapsedMicros last_press_timer;
 };
 
 /**
@@ -94,7 +101,8 @@ private:
 Note notes[no_of_keys];
 
 // initialize
-void init_key_notes() {
+void init_key_notes()
+{
     /* init key note_matrix
      * identified by in and output values when set and read via the mcp
      * each identifier is mapped to a note and velocity value
@@ -129,8 +137,8 @@ void init_key_notes() {
                 case 7:
                     notes[idx].setNoteValues(72 + in_idx, half_vel);
                     break;
-				default:
-					break;
+                default:
+                    break;
             }
         }
     }
@@ -157,12 +165,12 @@ void play_note()
     Note note_to_play;
     // Find the key that was pressed latest. Basically, this finds the key that is pressed which has
     // the minimal timer-value.
-    for (const auto & note : notes) {
+    for (const auto &note : notes) {
         if (note.isPressed() && (!note_to_play.isPressed() || note_to_play.getTime() < note.getTime())) {
             note_to_play = note;
         }
     }
-    
+
     /** Now play the note. We need to check if the key is pressed because if no note on the keyboard is
      * pressed, then note_to_play will be the "fake" note of the declaration "Note note_to_play;"
      */
@@ -173,7 +181,8 @@ void play_note()
     }
 }
 
-void setup() {
+void setup()
+{
     // setup hardware
     AudioMemory(500);
     sgtl5000_1.enable();
@@ -184,11 +193,11 @@ void setup() {
 
     // initialize mcps
     mcp_keys.begin();
-    for (int out_idx=8; out_idx<=15; out_idx++) {
+    for (int out_idx = 8; out_idx <= 15; out_idx++) {
         mcp_keys.pinMode(out_idx, OUTPUT);
         mcp_keys.digitalWrite(out_idx, LOW);
     }
-    for (int in_idx=0; in_idx<=7; in_idx++) {
+    for (int in_idx = 0; in_idx <= 7; in_idx++) {
         mcp_keys.pinMode(in_idx, INPUT);
     }
 }
