@@ -2,6 +2,7 @@
 #include <Adafruit_MCP23017.h>
 #include <elapsedMillis.h>
 #include <Audio.h>
+#include <wiring.h>
 
 // global defs
 #define no_of_keys 64
