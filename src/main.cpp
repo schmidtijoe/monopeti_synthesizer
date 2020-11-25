@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Adafruit_MCP23017.h>
+#include "wiring.h"
 #include <Audio.h>
 
 // global values
@@ -22,9 +23,7 @@ AudioControlSGTL5000 sgtl5000_1;
 class Note
 {
 public:
-    Note()
-        : push_state(false), note_value(0), velocity_value(0), last_press_timer(0)
-    {};
+    Note() : push_state(false), note_value(0), velocity_value(0), last_press_timer(0) {   };
 
     void setNoteValues(byte no_val, byte vel_val)
     {
@@ -99,6 +98,7 @@ private:
  * them to have the right note_val and vel_val, but not create new note-objects.
  */
 Note notes[no_of_keys];
+static Note NOTE_TO_PLAY;
 
 // initialize
 void init_key_notes()
@@ -162,22 +162,31 @@ void keybed_read()
 
 void play_note()
 {
-    Note note_to_play;
     // Find the key that was pressed latest. Basically, this finds the key that is pressed which has
     // the minimal timer-value.
     for (const auto &note : notes) {
-        if (note.isPressed() && (!note_to_play.isPressed() || note_to_play.getTime() < note.getTime())) {
-            note_to_play = note;
+
+        if (NOTE_TO_PLAY.get_velocity() == note.get_velocity() && NOTE_TO_PLAY.get_note() == note.get_note()) {
+            if (!note.isPressed()) {
+                NOTE_TO_PLAY.setPush(false);
+            }
+        }
+
+        if (note.isPressed() && (!NOTE_TO_PLAY.isPressed() || NOTE_TO_PLAY.getTime() < note.getTime())) {
+            NOTE_TO_PLAY = note;
         }
     }
 
     /** Now play the note. We need to check if the key is pressed because if no note on the keyboard is
-     * pressed, then note_to_play will be the "fake" note of the declaration "Note note_to_play;"
+     * pressed, then NOTE_TO_PLAY will be the "fake" note of the declaration "Note NOTE_TO_PLAY;"
      */
-    if (note_to_play.isPressed()) {
-        const auto note_value = note_to_play.get_note();
-        const auto vel_value = note_to_play.get_velocity();
+    if (NOTE_TO_PLAY.isPressed()) {
+        const auto note_value = NOTE_TO_PLAY.get_note();
+        const auto vel_value = NOTE_TO_PLAY.get_velocity();
         // Now just send this to the audio..
+    }
+    else {
+        // turn all notes off
     }
 }
 
