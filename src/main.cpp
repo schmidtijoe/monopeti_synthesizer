@@ -1,18 +1,18 @@
 #include <Arduino.h>
 #include <Adafruit_MCP23017.h>
-#include <elapsedMillis.h>
 #include <Audio.h>
 
-// global defs
-#define no_of_keys 64
-#define a_read_res 10  // bit depth of reading resolution
+// global values
+// We don't use defines anymore, because these are just "text replacements". Instead, we use
+// compile-time values that have a type and can be checked properly. The compiler will optimize
+// this heavily, so there is no runtime overhead.
+constexpr u_int8_t no_of_keys = 64;
+constexpr u_int8_t a_read_res = 10;  // bit depth of reading resolution
+constexpr byte half_vel = 90;
 
 // global vars
 Adafruit_MCP23017 mcp_keys;
-byte half_vel = 90;
-int res_range = (int)(2 << a_read_res) - 1;  // analod reading range, dependent on bit depth
-byte note;
-byte velocity;
+int res_range = (int)(2 << a_read_res) - 1;  // analog reading range, dependent on bit depth
 
 // teensy audio system design tool code
 AudioControlSGTL5000    sgtl5000_1;
@@ -20,20 +20,78 @@ AudioControlSGTL5000    sgtl5000_1;
 
 class Note {
 public:
-    bool push_state;
-    byte note_value;
-    byte velocity_value;
-    elapsedMicros last_press_timer;
+    Note() : push_state(false), note_value(0), velocity_value(0), last_press_timer(){};
 
-    // constructor
-    Note() = default;
-    Note(bool state, byte no_val, byte vel_val) {
-        push_state = state;
-        note_value = no_val;
-        velocity_value = vel_val;
+    void setNoteValues(byte no_val, byte vel_val) {
+		note_value = no_val;
+		velocity_value = vel_val;
     }
+
+    // We declare this method "const" because it doesn't "change" the note object. It
+    // just returns information.
+    bool isPressed() const {
+    	return push_state;
+    }
+
+	void setPush(bool state) {
+    	/** If we already have the new state, which means either a key was pressed before and
+    	 * is still pressed now, or a key was not pressed before and is not pressed now either,
+    	 * then we simply do nothing.
+    	 */
+		if (state == push_state) {
+			return;
+		}
+
+		// Now, we are sure that the state of the key has changed...
+		push_state = state;
+
+		/**
+		 * ... that means if the key is pressed now, we not only set its state to true, but
+		 * we also start the timer on it.
+		 */
+		if (push_state) {
+			last_press_timer = elapsedMicros();
+		}
+		/**
+		 * Otherwise, when the key was released, we reset the timer to 0
+		 */
+		else {
+			last_press_timer = 0;
+		}
+	}
+
+	elapsedMicros getTimer() const
+	{
+		return last_press_timer;
+	}
+
+    byte get_note() const
+    {
+        return note_value;
+    }
+    
+    byte get_velocity() const
+    {
+        return velocity_value;
+    }
+
+private:
+	bool push_state;
+	byte note_value;
+    byte velocity_value;
+	elapsedMicros last_press_timer;
 };
-Note* notes = new Note[no_of_keys];
+
+/**
+ * PS: We don't want "new" here, because this means we allocate the memory ourselves. If
+ * we allocate it ourselves, then we need to free the memory at some point or it will remain
+ * alive when the program crashes. Since we know the number of keys from the beginning, we
+ * can declare this array using [..] notation and let the compiler take care of the memory.
+ *
+ * Also, this already allocates all the note-objects and during initialization, we only want to "change"
+ * them to have the right note_val and vel_val, but not create new note-objects.
+ */
+Note notes[no_of_keys];
 
 // initialize
 void init_key_notes() {
@@ -48,71 +106,70 @@ void init_key_notes() {
             int idx = 8 * out_idx + in_idx;
             switch (out_idx) {
                 case 0:
-                    notes[idx] = Note(false, 56 + in_idx, half_vel);
+                    notes[idx].setNoteValues(56 + in_idx, half_vel);
                     break;
                 case 1:
-                    notes[idx] = Note(false, 64 + in_idx, half_vel);
+                    notes[idx].setNoteValues(64 + in_idx, half_vel);
                     break;
                 case 2:
-                    notes[idx] = Note(false, 48 + in_idx, half_vel);
+                    notes[idx].setNoteValues(48 + in_idx, half_vel);
                     break;
                 case 3:
-                    notes[idx] = Note(false, 48 + in_idx, 127);
+                    notes[idx].setNoteValues(48 + in_idx, 127);
                     break;
                 case 4:
-                    notes[idx] = Note(false, 56 + in_idx, 127);
+                    notes[idx].setNoteValues(56 + in_idx, 127);
                     break;
                 case 5:
-                    notes[idx] = Note(false, 64 + in_idx, 127);
+                    notes[idx].setNoteValues(64 + in_idx, 127);
                     break;
                 case 6:
-                    notes[idx] = Note(false, 72 + in_idx, 127);
+                    notes[idx].setNoteValues(72 + in_idx, 127);
                     break;
                 case 7:
-                    notes[idx] = Note(false, 72 + in_idx, half_vel);
+                    notes[idx].setNoteValues(72 + in_idx, half_vel);
                     break;
+				default:
+					break;
             }
         }
     }
 }
 
 // read keybed repetitively in loop, make sure this is fast! just updates the struct with key states and timers
-void keybed_read() {
-    bool key_state;
-    int total_idx;
-    for (int out_idx=8; out_idx<16; out_idx++) {
+void keybed_read()
+{
+    for (int out_idx = 8; out_idx < 16; out_idx++) {
         // set mcp pin high
         mcp_keys.digitalWrite(out_idx, HIGH);
 
         // run through read
-        for (int in_idx=0; in_idx<8; in_idx++) {
-            total_idx = (out_idx - 8) * 8 + in_idx;
-            key_state = mcp_keys.digitalRead(in_idx);
-            if (key_state != notes[total_idx].push_state) {
-                notes[total_idx].push_state = key_state;
-                if (key_state) {
-                    // set starting time when note pressed
-                    note = notes[total_idx].note_value;
-                    velocity = notes[total_idx].velocity_value;
-                    notes[total_idx].last_press_timer = elapsedMicros();
-                }
-                else {
-                    notes[total_idx].last_press_timer = 0;
-                    int note_compare = 0;
-                    unsigned int note_compare_timer = 200000;  // basically ignores notes pressed for 200 sek :D
-                    for (int search_idx = 0; search_idx < no_of_keys && search_idx != total_idx; search_idx++) {
-                        // look for notes still pressed:
-                        if (notes[search_idx].push_state) {
-                            // find the one with shortest last press duration
-                            if (notes[search_idx].last_press_timer < note_compare_timer) {
-                                note_compare = notes[search_idx].note_value;
-                                note_compare_timer = notes[search_idx].last_press_timer;
-                            }
-                        }
-                    }
-                }
-            }
+        for (int in_idx = 0; in_idx < 8; in_idx++) {
+            auto total_idx = (out_idx - 8) * 8 + in_idx;
+            auto key_state = static_cast<bool>(mcp_keys.digitalRead(in_idx));
+            notes[total_idx].setPush(key_state);
         }
+    }
+}
+
+void play_note()
+{
+    Note note_to_play;
+    // Find the key that was pressed latest. Basically, this finds the key that is pressed which has
+    // the minimal timer-value.
+    for (const auto & note : notes) {
+        if (note.isPressed() && note_to_play.getTimer() > note.getTimer()) {
+            note_to_play = note;
+        }
+    }
+    
+    /** Now play the note. We need to check if the key is pressed because if no note on the keyboard is
+     * pressed, then note_to_play will be the "fake" note of the declaration "Note note_to_play;"
+     */
+    if (note_to_play.isPressed()) {
+        const auto note_value = note_to_play.get_note();
+        const auto vel_value = note_to_play.get_velocity();
+        // Now just send this to the audio..
     }
 }
 
@@ -136,6 +193,8 @@ void setup() {
     }
 }
 
-void loop() {
-  keybed_read();
+void loop()
+{
+    keybed_read();
+    play_note();
 }
