@@ -3,23 +3,31 @@
 #include "wiring.h"
 #include <Audio.h>
 
-// global values
-// We don't use defines anymore, because these are just "text replacements". Instead, we use
-// compile-time values that have a type and can be checked properly. The compiler will optimize
-// this heavily, so there is no runtime overhead.
+/**
+ * Global variables
+ */
+// keybed
+Adafruit_MCP23017 MCP_KEYS;     // gpio expander handling keyboard
+constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle switches
 
-constexpr u_int8_t NO_OF_KEYS = 64;
+// analog reading
 constexpr u_int8_t READ_RES_BIT_DEPTH = 10;  // bit depth of reading resolution
-constexpr byte HALF_VEL = 90;
-
-// global vars
-Adafruit_MCP23017 MCP_KEYS;
-
 int RES_RANGE = (int) (2 << READ_RES_BIT_DEPTH) - 1;  // analog reading range, dependent on bit depth
-bool TOGGLE_LOOP = false;
+
+// note & midi interfacing
+constexpr byte HALF_VEL = 90;
+bool TOGGLE_LOOP = false;       // toggles note searching for mono-keyboard use
+
 // teensy audio system design tool code
 AudioControlSGTL5000 sgtl5000_1;
 
+/**
+ * Class description for mapping keybed to notes, saving:
+ * note value
+ * velocity value
+ * state of button
+ * timer last pressed if on
+ */
 class Note
 {
 public:
@@ -90,82 +98,14 @@ private:
     unsigned int last_press_timer;
 };
 
-/**
- * PS: We don't want "new" here, because this means we allocate the memory ourselves. If
- * we allocate it ourselves, then we need to free the memory at some point or it will remain
- * alive when the program crashes. Since we know the number of keys from the beginning, we
- * can declare this array using [..] notation and let the compiler take care of the memory.
- *
- * Also, this already allocates all the note-objects and during initialization, we only want to "change"
- * them to have the right note_val and vel_val, but not create new note-objects.
- */
+// create array of notes and current note
 Note notes[NO_OF_KEYS];
 static Note CURRENT_NOTE;
 
-// initialize
-void init_key_notes()
-{
-    /* init key note_matrix
-     * identified by in and output values when set and read via the mcp
-     * each identifier is mapped to a note and velocity value
-     * start time and logic value are initialized with 0
-     */
-
-    for (int out_idx = 0; out_idx < 8; out_idx++) {
-        for (int in_idx = 0; in_idx < 8; in_idx++) {
-            int idx = 8 * out_idx + in_idx;
-            switch (out_idx) {
-                case 0:
-                    notes[idx].setNoteValues(56 + in_idx, HALF_VEL);
-                    break;
-                case 1:
-                    notes[idx].setNoteValues(64 + in_idx, HALF_VEL);
-                    break;
-                case 2:
-                    notes[idx].setNoteValues(48 + in_idx, HALF_VEL);
-                    break;
-                case 3:
-                    notes[idx].setNoteValues(48 + in_idx, 127);
-                    break;
-                case 4:
-                    notes[idx].setNoteValues(56 + in_idx, 127);
-                    break;
-                case 5:
-                    notes[idx].setNoteValues(64 + in_idx, 127);
-                    break;
-                case 6:
-                    notes[idx].setNoteValues(72 + in_idx, 127);
-                    break;
-                case 7:
-                    notes[idx].setNoteValues(72 + in_idx, HALF_VEL);
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
-}
-
-// read keybed repetitively in loop, make sure this is fast! just updates the struct with key states and timers
-void keybed_read()
-{
-    for (int out_idx = 8; out_idx < 16; out_idx++) {
-        // set mcp pin high
-        MCP_KEYS.digitalWrite(out_idx, HIGH);
-
-        // run through read
-        for (int in_idx = 0; in_idx < 8; in_idx++) {
-            auto total_idx = (out_idx - 8) * 8 + in_idx;
-            auto key_state = static_cast<bool>(MCP_KEYS.digitalRead(in_idx));
-            notes[total_idx].setPush(key_state);
-        }
-
-        // reset pin
-        MCP_KEYS.digitalWrite(out_idx, LOW);
-
-    }
-}
-
+/**
+ * functions
+ */
+// testing/debugging functions
 // test function to display keyboard output
 void note_to_serial(const Note &name_note) {
     auto mod_value = name_note.get_note() % 12;
@@ -235,7 +175,72 @@ void note_to_serial(const Note &name_note) {
     }
 }
 
-void play_note()
+// initialize note struct -> give correct note numbers and velocities to elements
+void init_key_notes()
+{
+    /* init key note_matrix
+     * identified by in and output values when set and read via the mcp
+     * each identifier is mapped to a note and velocity value
+     * start time and logic value are initialized with 0
+     */
+
+    for (int out_idx = 0; out_idx < 8; out_idx++) {
+        for (int in_idx = 0; in_idx < 8; in_idx++) {
+            int idx = 8 * out_idx + in_idx;
+            switch (out_idx) {
+                case 0:
+                    notes[idx].setNoteValues(56 + in_idx, HALF_VEL);
+                    break;
+                case 1:
+                    notes[idx].setNoteValues(64 + in_idx, HALF_VEL);
+                    break;
+                case 2:
+                    notes[idx].setNoteValues(48 + in_idx, HALF_VEL);
+                    break;
+                case 3:
+                    notes[idx].setNoteValues(48 + in_idx, 127);
+                    break;
+                case 4:
+                    notes[idx].setNoteValues(56 + in_idx, 127);
+                    break;
+                case 5:
+                    notes[idx].setNoteValues(64 + in_idx, 127);
+                    break;
+                case 6:
+                    notes[idx].setNoteValues(72 + in_idx, 127);
+                    break;
+                case 7:
+                    notes[idx].setNoteValues(72 + in_idx, HALF_VEL);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+}
+
+// read keybed repetitively in loop, make sure this is fast! just updates the struct with key states and timers
+void keybed_read()
+{
+    for (int out_idx = 8; out_idx < 16; out_idx++) {
+        // set mcp pin high
+        MCP_KEYS.digitalWrite(out_idx, HIGH);
+
+        // run through read
+        for (int in_idx = 0; in_idx < 8; in_idx++) {
+            auto total_idx = (out_idx - 8) * 8 + in_idx;
+            auto key_state = static_cast<bool>(MCP_KEYS.digitalRead(in_idx));
+            notes[total_idx].setPush(key_state);
+        }
+
+        // reset pin
+        MCP_KEYS.digitalWrite(out_idx, LOW);
+
+    }
+}
+
+// identifies note to play
+void note_update()
 {
     /**
      * need function that sends:
@@ -288,12 +293,13 @@ void play_note()
     }
 }
 
+/**
+ * program
+ */
 void setup()
-{   // for testing:
-    delay(3000);
+{
     // setup hardware
     Serial.begin(9600);
-    Serial.println("Setup - Init");
     AudioMemory(300);
     sgtl5000_1.enable();
     sgtl5000_1.volume(0.5);
@@ -310,13 +316,10 @@ void setup()
     for (int in_idx = 0; in_idx <= 7; in_idx++) {
         MCP_KEYS.pinMode(in_idx, INPUT);
     }
-    delay(500);
-    Serial.println("Setup - Init: done");
-    Serial.println("__________________");
 }
 
 void loop()
 {
     keybed_read();
-    play_note();
+    note_update();
 }
