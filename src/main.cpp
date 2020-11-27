@@ -196,6 +196,7 @@ void play_note()
             if (!TOGGLE_LOOP) {
                 // one loop through other notes and nothing changed:
                 CURRENT_NOTE.setPush(false);  // makes sure timer is reset -> solves case for same note going off and on again
+                // send stop event
             }
         }
     }
