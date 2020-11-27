@@ -8,15 +8,15 @@
 // compile-time values that have a type and can be checked properly. The compiler will optimize
 // this heavily, so there is no runtime overhead.
 
-constexpr u_int8_t no_of_keys = 64;
-constexpr u_int8_t a_read_res = 10;  // bit depth of reading resolution
-constexpr byte half_vel = 90;
+constexpr u_int8_t NO_OF_KEYS = 64;
+constexpr u_int8_t READ_RES_BIT_DEPTH = 10;  // bit depth of reading resolution
+constexpr byte HALF_VEL = 90;
 
 // global vars
-Adafruit_MCP23017 mcp_keys;
+Adafruit_MCP23017 MCP_KEYS;
 
-int res_range = (int) (2 << a_read_res) - 1;  // analog reading range, dependent on bit depth
-
+int RES_RANGE = (int) (2 << READ_RES_BIT_DEPTH) - 1;  // analog reading range, dependent on bit depth
+bool TOGGLE_LOOP = false;
 // teensy audio system design tool code
 AudioControlSGTL5000 sgtl5000_1;
 
@@ -57,12 +57,14 @@ public:
          */
         if (push_state) {
             last_press_timer = elapsedMicros();
+            // send midi on event
         }
             /**
              * Otherwise, when the key was released, we reset the timer to 0
              */
         else {
             last_press_timer = 0;
+            // send midi off event
         }
     }
 
@@ -97,8 +99,8 @@ private:
  * Also, this already allocates all the note-objects and during initialization, we only want to "change"
  * them to have the right note_val and vel_val, but not create new note-objects.
  */
-Note notes[no_of_keys];
-static Note NOTE_TO_PLAY;
+Note notes[NO_OF_KEYS];
+static Note CURRENT_NOTE;
 
 // initialize
 void init_key_notes()
@@ -114,13 +116,13 @@ void init_key_notes()
             int idx = 8 * out_idx + in_idx;
             switch (out_idx) {
                 case 0:
-                    notes[idx].setNoteValues(56 + in_idx, half_vel);
+                    notes[idx].setNoteValues(56 + in_idx, HALF_VEL);
                     break;
                 case 1:
-                    notes[idx].setNoteValues(64 + in_idx, half_vel);
+                    notes[idx].setNoteValues(64 + in_idx, HALF_VEL);
                     break;
                 case 2:
-                    notes[idx].setNoteValues(48 + in_idx, half_vel);
+                    notes[idx].setNoteValues(48 + in_idx, HALF_VEL);
                     break;
                 case 3:
                     notes[idx].setNoteValues(48 + in_idx, 127);
@@ -135,7 +137,7 @@ void init_key_notes()
                     notes[idx].setNoteValues(72 + in_idx, 127);
                     break;
                 case 7:
-                    notes[idx].setNoteValues(72 + in_idx, half_vel);
+                    notes[idx].setNoteValues(72 + in_idx, HALF_VEL);
                     break;
                 default:
                     break;
@@ -149,12 +151,12 @@ void keybed_read()
 {
     for (int out_idx = 8; out_idx < 16; out_idx++) {
         // set mcp pin high
-        mcp_keys.digitalWrite(out_idx, HIGH);
+        MCP_KEYS.digitalWrite(out_idx, HIGH);
 
         // run through read
         for (int in_idx = 0; in_idx < 8; in_idx++) {
             auto total_idx = (out_idx - 8) * 8 + in_idx;
-            auto key_state = static_cast<bool>(mcp_keys.digitalRead(in_idx));
+            auto key_state = static_cast<bool>(MCP_KEYS.digitalRead(in_idx));
             notes[total_idx].setPush(key_state);
         }
     }
@@ -162,31 +164,41 @@ void keybed_read()
 
 void play_note()
 {
-    // Find the key that was pressed latest. Basically, this finds the key that is pressed which has
-    // the minimal timer-value.
-    for (const auto &note : notes) {
+    /**
+     * need function that sends:
+     * - > note on event when no note pressed previously (even if the last note off event is the same note!!!)
+     * - > note off event for all notes if no note is pressed anymore
+     * - > note pitch and velocity change if note goes off but others are still pressed
+     *
+     * what happens if note is on and new note is pressed? NOTE_TO_PLAY.isPressed() = true -> new on event  condition A -> note.ispressed true & highest getTime()
+     * what happens if no note is played and new is pressed -> new on event   condition A -> note.ispressed true & highest getTime()
+     * what happens if note goes off and other is on -> pitch vel change, no new event (extra condition, extra toggle? one more loop til off?)
+     * what happens if note goes off and no other is on -> new off event
+     * what happens with velocity changes? -> no play events.
+     */
+    for (const auto &note: notes) {
+        if (note.isPressed() && (note.getTime() > CURRENT_NOTE.getTime())) {
+            CURRENT_NOTE = note;
+            // send play event
+        }
 
-        if (NOTE_TO_PLAY.get_velocity() == note.get_velocity() && NOTE_TO_PLAY.get_note() == note.get_note()) {
-            if (!note.isPressed()) {
-                NOTE_TO_PLAY.setPush(false);
+        // in case were in search mode , ie toggled loop to find other pressed notes
+        if (note.isPressed() && TOGGLE_LOOP) {
+            CURRENT_NOTE = note;
+            // change pitch & velocity
+            // reset toggle
+            TOGGLE_LOOP = !TOGGLE_LOOP;
+        }
+
+        // in case were on current note and it switches to off
+        if ((note.get_note() == CURRENT_NOTE.get_note()) && (note.get_velocity() == CURRENT_NOTE.get_velocity()) && !note.isPressed() && CURRENT_NOTE.isPressed()) {
+            // toggle one more loop through notes to find other
+            TOGGLE_LOOP = !TOGGLE_LOOP;
+            // if not found, switch to off
+            if (!TOGGLE_LOOP) {
+                CURRENT_NOTE.setPush(false);  // makes sure timer is reset -> solves case for same note going off and on again
             }
         }
-
-        if (note.isPressed() && (!NOTE_TO_PLAY.isPressed() || NOTE_TO_PLAY.getTime() < note.getTime())) {
-            NOTE_TO_PLAY = note;
-        }
-    }
-
-    /** Now play the note. We need to check if the key is pressed because if no note on the keyboard is
-     * pressed, then NOTE_TO_PLAY will be the "fake" note of the declaration "Note NOTE_TO_PLAY;"
-     */
-    if (NOTE_TO_PLAY.isPressed()) {
-        const auto note_value = NOTE_TO_PLAY.get_note();
-        const auto vel_value = NOTE_TO_PLAY.get_velocity();
-        // Now just send this to the audio..
-    }
-    else {
-        // turn all notes off
     }
 }
 
@@ -196,18 +208,18 @@ void setup()
     AudioMemory(500);
     sgtl5000_1.enable();
     sgtl5000_1.volume(0.5);
-    analogReadResolution(a_read_res);  // also here, 12 bit would mean 0 - 4096 value range in analog read
+    analogReadResolution(READ_RES_BIT_DEPTH);  // also here, 12 bit would mean 0 - 4096 value range in analog read
     // initialize keys
     init_key_notes();
 
     // initialize mcps
-    mcp_keys.begin();
+    MCP_KEYS.begin();
     for (int out_idx = 8; out_idx <= 15; out_idx++) {
-        mcp_keys.pinMode(out_idx, OUTPUT);
-        mcp_keys.digitalWrite(out_idx, LOW);
+        MCP_KEYS.pinMode(out_idx, OUTPUT);
+        MCP_KEYS.digitalWrite(out_idx, LOW);
     }
     for (int in_idx = 0; in_idx <= 7; in_idx++) {
-        mcp_keys.pinMode(in_idx, INPUT);
+        MCP_KEYS.pinMode(in_idx, INPUT);
     }
 }
 
