@@ -56,7 +56,7 @@ public:
          * we also start the timer on it.
          */
         if (push_state) {
-            last_press_timer = elapsedMicros();
+            last_press_timer = micros();
             // send midi on event
         }
             /**
@@ -68,7 +68,7 @@ public:
         }
     }
 
-    elapsedMicros getTime() const
+    unsigned int getTime() const
     {
         return last_press_timer;
     }
@@ -87,7 +87,7 @@ private:
     bool push_state;
     byte note_value;
     byte velocity_value;
-    elapsedMicros last_press_timer;
+    unsigned int last_press_timer;
 };
 
 /**
@@ -159,6 +159,79 @@ void keybed_read()
             auto key_state = static_cast<bool>(MCP_KEYS.digitalRead(in_idx));
             notes[total_idx].setPush(key_state);
         }
+
+        // reset pin
+        MCP_KEYS.digitalWrite(out_idx, LOW);
+
+    }
+}
+
+// test function to display keyboard output
+void note_to_serial(const Note &name_note) {
+    auto mod_value = name_note.get_note() % 12;
+    switch(mod_value) {
+        case 0:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tC \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 1:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tC# \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 2:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tD \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 3:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tD# \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 4:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tE \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 5:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tF \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 6:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tF# \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 7:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tG \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 8:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tG# \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 9:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tA \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 10:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tA# \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        case 11:
+            Serial.println("Note pressed: \tvalue \tvelocity: ");
+            Serial.print("\tH \t");
+            Serial.println(name_note.get_velocity());
+            break;
+        default:
+            break;
     }
 }
 
@@ -178,13 +251,25 @@ void play_note()
      */
     for (const auto &note: notes) {
         if (note.isPressed() && (note.getTime() > CURRENT_NOTE.getTime())) {
+            if (note.get_note() == CURRENT_NOTE.get_note()) {
+                // same note value
+                Serial.println("no new event");
+                // only velocity change, no new note event
+            }
             CURRENT_NOTE = note;
             // send play event
+            note_to_serial(note);
         }
 
         // in case were in search mode, ie toggled loop to find other pressed notes
         if (note.isPressed() && TOGGLE_LOOP) {
+            if (note.get_note() == CURRENT_NOTE.get_note()) {
+                // same note value
+                // only velocity change, no new note event
+                Serial.println("no new event");
+            }
             CURRENT_NOTE = note;
+            note_to_serial(note);
             // change pitch & velocity
             // reset toggle
             TOGGLE_LOOP = false;
@@ -196,6 +281,7 @@ void play_note()
             if (!TOGGLE_LOOP) {
                 // one loop through other notes and nothing changed:
                 CURRENT_NOTE.setPush(false);  // makes sure timer is reset -> solves case for same note going off and on again
+                Serial.println("last off event");
                 // send stop event
             }
         }
@@ -203,9 +289,12 @@ void play_note()
 }
 
 void setup()
-{
+{   // for testing:
+    delay(3000);
     // setup hardware
-    AudioMemory(500);
+    Serial.begin(9600);
+    Serial.println("Setup - Init");
+    AudioMemory(300);
     sgtl5000_1.enable();
     sgtl5000_1.volume(0.5);
     analogReadResolution(READ_RES_BIT_DEPTH);  // also here, 12 bit would mean 0 - 4096 value range in analog read
@@ -221,6 +310,9 @@ void setup()
     for (int in_idx = 0; in_idx <= 7; in_idx++) {
         MCP_KEYS.pinMode(in_idx, INPUT);
     }
+    delay(500);
+    Serial.println("Setup - Init: done");
+    Serial.println("__________________");
 }
 
 void loop()
