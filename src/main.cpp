@@ -170,11 +170,11 @@ void play_note()
      * - > note off event for all notes if no note is pressed anymore
      * - > note pitch and velocity change if note goes off but others are still pressed
      *
-     * what happens if note is on and new note is pressed? NOTE_TO_PLAY.isPressed() = true -> new on event  condition A -> note.ispressed true & highest getTime()
-     * what happens if no note is played and new is pressed -> new on event   condition A -> note.ispressed true & highest getTime()
-     * what happens if note goes off and other is on -> pitch vel change, no new event (extra condition, extra toggle? one more loop til off?)
-     * what happens if note goes off and no other is on -> new off event
-     * what happens with velocity changes? -> no play events.
+     * what happens if note is on and new note is pressed?          -> new on event  condition A -> note.ispressed true & highest getTime()
+     * what happens if no note is played and new is pressed?        -> new on event   condition A -> note.ispressed true & highest getTime()
+     * what happens if note goes off and other is on?               -> pitch & vel change, no new event (extra condition, extra toggle? one more loop til off?)
+     * what happens if note goes off and no other is on             -> new off event
+     * what happens with velocity changes?                          -> no play events. not yet incorporated
      */
     for (const auto &note: notes) {
         if (note.isPressed() && (note.getTime() > CURRENT_NOTE.getTime())) {
@@ -182,7 +182,7 @@ void play_note()
             // send play event
         }
 
-        // in case were in search mode , ie toggled loop to find other pressed notes
+        // in case were in search mode, ie toggled loop to find other pressed notes
         if (note.isPressed() && TOGGLE_LOOP) {
             CURRENT_NOTE = note;
             // change pitch & velocity
