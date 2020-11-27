@@ -187,17 +187,16 @@ void play_note()
             CURRENT_NOTE = note;
             // change pitch & velocity
             // reset toggle
-            TOGGLE_LOOP = !TOGGLE_LOOP;
+            TOGGLE_LOOP = false;
         }
 
         // in case were on current note and it switches to off
         if ((note.get_note() == CURRENT_NOTE.get_note()) && (note.get_velocity() == CURRENT_NOTE.get_velocity()) && !note.isPressed() && CURRENT_NOTE.isPressed()) {
-            // toggle one more loop through notes to find other
-            TOGGLE_LOOP = !TOGGLE_LOOP;
             // if not found, switch to off
             if (!TOGGLE_LOOP) {
                 CURRENT_NOTE.setPush(false);  // makes sure timer is reset -> solves case for same note going off and on again
             }
+            else TOGGLE_LOOP = true;
         }
     }
 }
