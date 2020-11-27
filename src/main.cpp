@@ -320,7 +320,7 @@ void note_update()
      * what happens if no note is played and new is pressed?        -> new on event   condition A -> note.ispressed true & highest getTime()
      * what happens if note goes off and other is on?               -> pitch & vel change, no new event (extra condition, extra toggle? one more loop til off?)
      * what happens if note goes off and no other is on             -> new off event
-     * what happens with velocity changes?                          -> no play events. not yet incorporated
+     * what happens with velocity changes?                          -> no play events
      */
     for (const auto &note: notes) {
         if (note.isPressed() && (note.getTime() > CURRENT_NOTE.getTime())) {
@@ -372,6 +372,7 @@ void setup()
     sgtl5000_1.enable();
     sgtl5000_1.volume(0.5);
     analogReadResolution(READ_RES_BIT_DEPTH);  // also here, 12 bit would mean 0 - 4096 value range in analog read
+
     // initialize keys
     init_key_notes();
 
