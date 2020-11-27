@@ -192,11 +192,11 @@ void play_note()
 
         // in case were on current note and it switches to off
         if ((note.get_note() == CURRENT_NOTE.get_note()) && (note.get_velocity() == CURRENT_NOTE.get_velocity()) && !note.isPressed() && CURRENT_NOTE.isPressed()) {
-            // if not found, switch to off
+            TOGGLE_LOOP = !TOGGLE_LOOP;
             if (!TOGGLE_LOOP) {
+                // one loop through other notes and nothing changed:
                 CURRENT_NOTE.setPush(false);  // makes sure timer is reset -> solves case for same note going off and on again
             }
-            else TOGGLE_LOOP = true;
         }
     }
 }
