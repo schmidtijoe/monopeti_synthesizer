@@ -17,10 +17,19 @@ constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle swi
 // analog reading
 constexpr u_int8_t READ_RES_BIT_DEPTH = 10;  // bit depth of reading resolution
 int RES_RANGE = (int) (2 << READ_RES_BIT_DEPTH) - 1;  // analog reading range, dependent on bit depth
+constexpr u_int8_t NO_OF_MODULES = 4;      // number of multiplexer modules for analog read ins
+int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 31};
+bool TOGGLE_MUX_SET_READ = false;
+int INDEX_MUX_READ = 0;
+elapsedMillis UPDATE_TIMER;
+unsigned int UPDATE_INTERVAL = 2;       // [ms] reading interval for analog inputs through multiplexers
 
 // note & midi interfacing
 constexpr byte HALF_VEL = 90;
 bool TOGGLE_LOOP = false;       // toggles note searching for mono-keyboard use
+
+// digital outputs
+Adafruit_MCP23017 MCP_DIO;      // gpio expander, handling multiplexer switches and LED controls
 
 /**
  * Audio System design tool
@@ -169,6 +178,48 @@ private:
 // create array of notes and current note
 Note notes[NO_OF_KEYS];
 static Note CURRENT_NOTE;
+
+/**
+ * multiplexer modules as own objects
+ */
+class Mux{
+public:
+    Mux() : chx(), analogOutPin(0) {   };
+
+    void setAnalogIn(int pin_no){
+        analogOutPin = pin_no;
+    }
+
+    void setAddressPins(int ch_no) {
+        bool bit;
+        int bit_calc;
+        // set mcp pins for mux address control:
+        bit_calc = ch_no;
+        for (int mux_idx = 8; mux_idx < 11; mux_idx++) {
+            // this turns the index number which runs from 0 to 7 into 3 bit binary format to feed the address pins d0-2 of the mux HIGH or LOW
+            bit = static_cast<bool>(bit_calc % 2);
+            bit_calc = (int) bit_calc / 2;
+            MCP_DIO.digitalWrite(mux_idx, bit);
+        }
+    }
+
+    void readValue(int ch_no) {
+        int read_value;
+        read_value = abs(analogRead(analogOutPin) - RES_RANGE);
+        if (chx[ch_no] != read_value) chx[ch_no] = read_value;
+    }
+
+    int getReadValue(int ch_no) const{
+        return chx[ch_no];
+    }
+
+private:
+    int chx[8];
+    int analogOutPin;
+};
+
+// create array of muxs for mux modules
+Mux mux_modules[NO_OF_MODULES];
 
 /**
  * functions
@@ -362,6 +413,49 @@ void note_update()
 }
 
 /**
+ * Multiplexer, setting, reading
+ */
+void init_multiplexer() {
+    for (int mux_idx=0; mux_idx<NO_OF_MODULES; mux_idx++) {
+        mux_modules[mux_idx].setAnalogIn(AIN_PINS_MUX[mux_idx]);
+    }
+ }
+
+void mux_update() {
+    if (UPDATE_TIMER >= UPDATE_INTERVAL) {
+        UPDATE_TIMER = 0;
+        if (!TOGGLE_MUX_SET_READ) {
+            // Set multiplexer address (enough for one module -> all share same address line)
+            mux_modules[0].setAddressPins(INDEX_MUX_READ);
+            TOGGLE_MUX_SET_READ = true;     // setup read
+        }
+        else {
+            // read values
+            }
+    }
+}
+
+/**
+ * void mux_update() {
+    if (read_toggle == 0) {
+        mux_set(reading_index);
+    }
+    else {
+        mux_1_control(reading_index);
+        mux_2_control(reading_index);
+        mux_3_control(reading_index);
+        mux_4_control(reading_index);
+    }
+    read_toggle++;
+    if (read_toggle >=3) {
+        read_toggle=0;
+        reading_index++;
+    }
+    if (reading_index >=8) reading_index = 0;
+}
+*/
+
+/**
  * program
  */
 void setup()
@@ -375,6 +469,8 @@ void setup()
 
     // initialize keys
     init_key_notes();
+    // initialize mux objects
+    init_multiplexer();
 
     // initialize mcps
     MCP_KEYS.begin();
@@ -384,6 +480,11 @@ void setup()
     }
     for (int in_idx = 0; in_idx <= 7; in_idx++) {
         MCP_KEYS.pinMode(in_idx, INPUT);
+    }
+
+    MCP_DIO.begin(1);
+    for (int mux_idx = 8; mux_idx < 11; mux_idx++) {
+        MCP_DIO.pinMode(mux_idx, OUTPUT);
     }
 }
 
