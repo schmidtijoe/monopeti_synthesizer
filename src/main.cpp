@@ -1,11 +1,8 @@
 #include <Arduino.h>
 #include <Adafruit_MCP23017.h>
 #include "wiring.h"
-#include <Audio.h>
-#include <Wire.h>
-#include <SPI.h>
-#include <SD.h>
-#include <SerialFlash.h>
+// include audio system design tool code
+#include "audio_system.h"
 
 /**
  * Global variables
@@ -17,12 +14,13 @@ constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle swi
 // analog reading
 constexpr u_int8_t READ_RES_BIT_DEPTH = 10;  // bit depth of reading resolution
 int RES_RANGE = (int) (2 << READ_RES_BIT_DEPTH) - 1;  // analog reading range, dependent on bit depth
-constexpr u_int8_t NO_OF_MODULES = 4;      // number of multiplexer modules for analog read ins
-int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 31};
-bool TOGGLE_MUX_SET_READ = false;
-int INDEX_MUX_READ = 0;
 elapsedMillis UPDATE_TIMER;
+// multiplexers
 unsigned int UPDATE_INTERVAL = 2;       // [ms] reading interval for analog inputs through multiplexers
+constexpr u_int8_t NO_OF_MODULES = 4;
+int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 31};
+bool TOGGLE_MUX_SET_READ = false;       // toggle between setting and reading mux
+int MUX_READ_INDEX = 0;
 
 // note & midi interfacing
 constexpr byte HALF_VEL = 90;
@@ -31,72 +29,11 @@ bool TOGGLE_LOOP = false;       // toggles note searching for mono-keyboard use
 // digital outputs
 Adafruit_MCP23017 MCP_DIO;      // gpio expander, handling multiplexer switches and LED controls
 
-/**
- * Audio System design tool
- */
-// GUItool: begin automatically generated code
-AudioSynthWaveform       LFO1;      //xy=55,76.00000381469727
-AudioAmplifier           Volume;           //xy=122.00000762939453,552.0000076293945
-AudioEffectFade          vel_fade_midi;          //xy=175.0000228881836,343.0000057220459
-AudioEffectFade          vel_change_low;          //xy=179.00001525878906,274.0000047683716
-AudioEffectFade          vel_change_high;          //xy=180.00000762939453,309.00000381469727
-AudioEffectEnvelope      env_pitch;      //xy=182,76
-AudioEffectDelay         delay_fx;         //xy=266.4444389343262,595.5555419921875
-AudioSynthKarplusStrong  pink;        //xy=331,153.00000190734863
-AudioSynthWaveformModulated OSC1;   //xy=335.00000381469727,26.000003337860107
-AudioSynthWaveformModulated OSC2;   //xy=337.00000762939453,67.00000667572021
-AudioSynthWaveformModulated OSC3;   //xy=337,110.00001430511475
-AudioSynthWaveform       LFO_ring;      //xy=345.00000762939453,351.0000057220459
-AudioSynthWaveformDc     dc_ring;            //xy=345.00000762939453,392.0000057220459
-AudioMixer4              velocity_env;         //xy=379.00000762939453,296.00000381469727
-AudioMixer4              mix_delay1;         //xy=417.00000381469727,555.7999954223633
-AudioMixer4              mix_delay2;         //xy=419.00000381469727,623.7999954223633
-AudioMixer4              mix_ring_wet;         //xy=493,381
-AudioEffectMultiply      ring;      //xy=548.0000076293945,294.00000381469727
-AudioMixer4              mix_osc;         //xy=549.0000076293945,66.00000762939453
-AudioSynthWaveform       LFO2;      //xy=608.0000152587891,445.22223234176636
-AudioMixer4              mix_delay_wet;         //xy=610.4444274902344,517.466682434082
-AudioEffectEnvelope      env_filter;      //xy=668.0000114440918,338.0000057220459
-AudioAmplifier           filter_attenuator;           //xy=704.0000114440918,296.00000381469727
-AudioOutputI2S           i2s2;           //xy=749.7500133514404,33.416707038879395
-AudioEffectFreeverbStereo freeverbs;     //xy=772.5555686950684,516.000020980835
-AudioEffectEnvelope      ADSR_vol;      //xy=826.0000114440918,93
-AudioFilterStateVariable LPF;        //xy=866.0000133514404,306.0000057220459
-AudioConnection          patchCord1(LFO1, env_pitch);
-AudioConnection          patchCord2(Volume, delay_fx);
-AudioConnection          patchCord3(Volume, 0, mix_delay_wet, 0);
-AudioConnection          patchCord4(vel_fade_midi, 0, velocity_env, 2);
-AudioConnection          patchCord5(vel_change_low, 0, velocity_env, 0);
-AudioConnection          patchCord6(vel_change_high, 0, velocity_env, 1);
-AudioConnection          patchCord7(delay_fx, 0, mix_delay1, 0);
-AudioConnection          patchCord8(delay_fx, 1, mix_delay1, 1);
-AudioConnection          patchCord9(delay_fx, 2, mix_delay1, 2);
-AudioConnection          patchCord10(delay_fx, 3, mix_delay1, 3);
-AudioConnection          patchCord11(delay_fx, 4, mix_delay2, 0);
-AudioConnection          patchCord12(delay_fx, 5, mix_delay2, 1);
-AudioConnection          patchCord13(pink, 0, mix_osc, 3);
-AudioConnection          patchCord14(OSC1, 0, mix_osc, 0);
-AudioConnection          patchCord15(OSC2, 0, mix_osc, 1);
-AudioConnection          patchCord16(OSC3, 0, mix_osc, 2);
-AudioConnection          patchCord17(LFO_ring, 0, mix_ring_wet, 0);
-AudioConnection          patchCord18(dc_ring, 0, mix_ring_wet, 1);
-AudioConnection          patchCord19(velocity_env, 0, ring, 0);
-AudioConnection          patchCord20(mix_delay1, 0, mix_delay_wet, 1);
-AudioConnection          patchCord21(mix_delay2, 0, mix_delay_wet, 2);
-AudioConnection          patchCord22(mix_ring_wet, 0, ring, 1);
-AudioConnection          patchCord23(ring, filter_attenuator);
-AudioConnection          patchCord24(mix_osc, 0, i2s2, 0);
-AudioConnection          patchCord25(mix_osc, 0, i2s2, 1);
-AudioConnection          patchCord26(LFO2, env_filter);
-AudioConnection          patchCord27(mix_delay_wet, freeverbs);
-AudioConnection          patchCord28(env_filter, 0, LPF, 1);
-AudioConnection          patchCord29(filter_attenuator, 0, LPF, 0);
-AudioConnection          patchCord30(ADSR_vol, vel_change_low);
-AudioConnection          patchCord31(ADSR_vol, vel_change_high);
-AudioConnection          patchCord32(ADSR_vol, vel_fade_midi);
-AudioConnection          patchCord33(LPF, 0, Volume, 0);
-AudioControlSGTL5000     sgtl5000_1;     //xy=885.0000076293945,183.00000762939453
-// GUItool: end automatically generated code
+// controls
+// osc
+int oscWaveState[3] = {0, 0, 0};
+short oscWaveForms[4] = {WAVEFORM_SINE, WAVEFORM_SQUARE, WAVEFORM_TRIANGLE, WAVEFORM_SAWTOOTH};
+bool ENVELOPE_TARGET_SWITCH = false;
 
 /**
  * Class description for mapping keybed to notes, saving:
@@ -179,51 +116,75 @@ private:
 Note notes[NO_OF_KEYS];
 static Note CURRENT_NOTE;
 
-/**
- * multiplexer modules as own objects
- */
-class Mux{
+class Mux {
 public:
-    Mux() : chx(), analogOutPin(0) {   };
+    Mux() : MUX_ADDR_PINS(), chx_values(), analog_out_pin(), state_change() {};
+    // number of multiplexer modules for analog read ins, default values from design
+    const int MUX_ADDR_PINS[3]{8, 9, 10};
 
-    void setAnalogIn(int pin_no){
-        analogOutPin = pin_no;
+    void setAnalogOut(int a_pin) {
+        // set the output pin of the object
+        analog_out_pin = a_pin;
     }
 
-    void setAddressPins(int ch_no) {
-        bool bit;
-        int bit_calc;
-        // set mcp pins for mux address control:
-        bit_calc = ch_no;
-        for (int mux_idx = 8; mux_idx < 11; mux_idx++) {
-            // this turns the index number which runs from 0 to 7 into 3 bit binary format to feed the address pins d0-2 of the mux HIGH or LOW
-            bit = static_cast<bool>(bit_calc % 2);
-            bit_calc = (int) bit_calc / 2;
-            MCP_DIO.digitalWrite(mux_idx, bit);
+    void setAddrRead(bool toggle_read, int ch_no) {
+        if (toggle_read) {
+            // read values
+            read(ch_no);
+        }
+        else {
+            // set addr pins
+            setAddrPins(ch_no);
         }
     }
 
-    void readValue(int ch_no) {
-        int read_value;
-        read_value = abs(analogRead(analogOutPin) - RES_RANGE);
-        if (chx[ch_no] != read_value) chx[ch_no] = read_value;
+    int getChValue (int ch_no) const {
+        return chx_values[ch_no];
     }
 
-    int getReadValue(int ch_no) const{
-        return chx[ch_no];
+    bool hasChanged() const {
+        return state_change;
     }
 
 private:
-    int chx[8];
-    int analogOutPin;
+    int chx_values[8]{};
+    int analog_out_pin{};
+    bool state_change{false};
+
+    void setAddrPins (int ch_no) {
+        // calculate 3 bit number from channel number to set addr pins high or low and address mux channel
+        auto bit_calc = ch_no;
+        bool bit;
+        for (int idx : MUX_ADDR_PINS) {
+            bit = static_cast<bool>(bit_calc % 2);
+            bit_calc /= 2;
+            MCP_DIO.digitalWrite(idx, bit);
+        }
+    }
+
+    void read (int ch_no) {
+        auto read_value = abs(RES_RANGE - analogRead(analog_out_pin));
+        if (read_value != chx_values[ch_no]) {
+            chx_values[ch_no] = read_value;
+            state_change = true;
+        }
+        else state_change = false;
+    }
 };
 
-// create array of muxs for mux modules
-Mux mux_modules[NO_OF_MODULES];
+Mux multiplexer_modules[NO_OF_MODULES];
 
 /**
  * functions
  */
+// controls
+void setEnvelopeDefault(AudioEffectEnvelope envDefault) {
+    envDefault.attack(15.0);
+    envDefault.decay(15.0);
+    envDefault.sustain(1);
+    envDefault.release(15.0);
+}
+
 // testing/debugging functions
 // test function to display keyboard output
 void note_to_serial(const Note &name_note) {
@@ -415,45 +376,144 @@ void note_update()
 /**
  * Multiplexer, setting, reading
  */
-void init_multiplexer() {
-    for (int mux_idx=0; mux_idx<NO_OF_MODULES; mux_idx++) {
-        mux_modules[mux_idx].setAnalogIn(AIN_PINS_MUX[mux_idx]);
+void init_mux() {
+    for (int idx=0; idx<NO_OF_MODULES; idx++) {
+        multiplexer_modules[idx].setAnalogOut(AIN_PINS_MUX[idx]);
     }
- }
+}
+
+void muxControlChange(int mux_no, int ch_no, int value) {
+    float ccValue = static_cast<float>(value) / static_cast<float>(RES_RANGE);  // 0 to 1
+    int waveform;
+    switch (mux_no) {
+        case 0:
+            // first multiplexer controls - ADSR
+            AudioEffectEnvelope ccEnvelope;
+            if (ENVELOPE_TARGET_SWITCH) {
+                ccEnvelope = env_filter;
+                setEnvelopeDefault(env_pitch);
+            }
+            else {
+                ccEnvelope = env_pitch;
+                setEnvelopeDefault(env_filter);
+            }
+            switch (ch_no) {
+                case 0:
+                    // ADSR - volume, attack
+                    ADSR_vol.attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
+                    break;
+                case 1:
+                    // ADSR - volume, decay
+                    ADSR_vol.decay(static_cast<float>(8000.0 * ccValue + 15.0));    // min 15ms to 8 sec
+                    break;
+                case 2:
+                    // ADSR - volume, sustain
+                    ADSR_vol.sustain(ccValue);  // 0 to 1
+                    break;
+                case 3:
+                    // ADSR - volume, release
+                    ADSR_vol.release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
+                    break;
+                case 4:
+                    // ADSR - modulation, attack
+                    ccEnvelope.attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
+                    break;
+                case 5:
+                    // ADSR - modulation, decay
+                    ccEnvelope.decay(static_cast<float>(8000.0 * ccValue + 15.0));    // min 15ms to 8 sec
+                    break;
+                case 6:
+                    // ADSR - modulation, sustain
+                    ccEnvelope.release(ccValue);  // 0 to 1
+                    break;
+                case 7:
+                    // ADSR - modulation, release
+                    ccEnvelope.release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
+                    break;
+                default:
+                    break;
+            }
+            break;
+
+        case 1:
+            // second multiplexer controls - Mixer
+            switch (ch_no) {
+                case 0:
+                    // OSC1 volume
+                    mix_osc.gain(0, 0.25 * ccValue);
+                    break;
+                case 1:
+                    // OSC1 wave
+                    waveform = map(static_cast<int>(ccValue) * RES_RANGE, 0, RES_RANGE, 0, 3);
+                    // switch only upon change (mux object change detection in finer detail)
+                    if (waveform != oscWaveState[0]) {
+                        oscWaveState[0] = waveform;
+                        OSC1.begin(oscWaveForms[waveform]);
+                    }
+                    break;
+                case 2:
+                    // OSC2 volume
+                    mix_osc.gain(1, 0.25 * ccValue);
+                    break;
+                case 3:
+                    // waveform & sub switch OSC2
+                    waveform = 0;
+                    break;
+                case 4:
+                    break;
+                case 5:
+                    break;
+                case 6:
+                    break;
+                case 7:
+                    break;
+                default:
+                    break;
+            }
+            break;
+
+        case 2:
+            // third multiplexer controls - lfo, lpf
+            break;
+
+        case 3:
+            // fourth multiplexer controls - fx
+            break;
+
+        default:
+            break;
+    }
+
+}
+
 
 void mux_update() {
     if (UPDATE_TIMER >= UPDATE_INTERVAL) {
         UPDATE_TIMER = 0;
+        // set up loop
         if (!TOGGLE_MUX_SET_READ) {
-            // Set multiplexer address (enough for one module -> all share same address line)
-            mux_modules[0].setAddressPins(INDEX_MUX_READ);
-            TOGGLE_MUX_SET_READ = true;     // setup read
-        }
-        else {
-            // read values
+            for (auto mpx: multiplexer_modules) {
+                mpx.setAddrRead(false, MUX_READ_INDEX);
             }
-    }
-}
+        }
 
-/**
- * void mux_update() {
-    if (read_toggle == 0) {
-        mux_set(reading_index);
+        // reading loop
+        else {
+            for (int idx=0; idx<NO_OF_MODULES; idx++) {
+                multiplexer_modules[idx].setAddrRead(true, MUX_READ_INDEX);
+                // only trigger control changes when they occur
+                if (multiplexer_modules[idx].hasChanged()) {
+                    muxControlChange(idx, MUX_READ_INDEX, multiplexer_modules[idx].getChValue(MUX_READ_INDEX));
+                }
+            }
+            MUX_READ_INDEX++;
+        }
+        TOGGLE_MUX_SET_READ = !TOGGLE_MUX_SET_READ;     // switch between setup and read
+
+        // reset index
+        if (MUX_READ_INDEX >= 8) MUX_READ_INDEX = 0;
     }
-    else {
-        mux_1_control(reading_index);
-        mux_2_control(reading_index);
-        mux_3_control(reading_index);
-        mux_4_control(reading_index);
-    }
-    read_toggle++;
-    if (read_toggle >=3) {
-        read_toggle=0;
-        reading_index++;
-    }
-    if (reading_index >=8) reading_index = 0;
 }
-*/
 
 /**
  * program
@@ -470,7 +530,7 @@ void setup()
     // initialize keys
     init_key_notes();
     // initialize mux objects
-    init_multiplexer();
+    init_mux();
 
     // initialize mcps
     MCP_KEYS.begin();
