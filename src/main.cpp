@@ -13,12 +13,12 @@ constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle swi
 
 // analog reading
 constexpr u_int8_t READ_RES_BIT_DEPTH = 10;  // bit depth of reading resolution
-int RES_RANGE = (int) (2 << READ_RES_BIT_DEPTH) - 1;  // analog reading range, dependent on bit depth
+int RES_RANGE = (int) pow(2, READ_RES_BIT_DEPTH) - 1;  // analog reading range, dependent on bit depth
 elapsedMillis UPDATE_TIMER;
 // multiplexers
 unsigned int UPDATE_INTERVAL = 2;       // [ms] reading interval for analog inputs through multiplexers
 constexpr u_int8_t NO_OF_MODULES = 4;
-int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 31};
+int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 32};
 bool TOGGLE_MUX_SET_READ = false;       // toggle between setting and reading mux
 int MUX_READ_INDEX = 0;
 
@@ -34,6 +34,10 @@ Adafruit_MCP23017 MCP_DIO;      // gpio expander, handling multiplexer switches 
 int oscWaveState[3] = {0, 0, 0};
 short oscWaveForms[4] = {WAVEFORM_SINE, WAVEFORM_SQUARE, WAVEFORM_TRIANGLE, WAVEFORM_SAWTOOTH};
 bool ENVELOPE_TARGET_SWITCH = false;
+float detune = 0.0;
+
+// envelopes
+AudioEffectEnvelope* ccEnvelope;     // pointer?
 
 /**
  * Class description for mapping keybed to notes, saving:
@@ -118,9 +122,8 @@ static Note CURRENT_NOTE;
 
 class Mux {
 public:
-    Mux() : MUX_ADDR_PINS(), chx_values(), analog_out_pin(), state_change() {};
+    Mux() : chx_values(), analog_out_pin(), state_change() {};
     // number of multiplexer modules for analog read ins, default values from design
-    const int MUX_ADDR_PINS[3]{8, 9, 10};
 
     void setAnalogOut(int a_pin) {
         // set the output pin of the object
@@ -147,6 +150,7 @@ public:
     }
 
 private:
+    const int MuxAddrPins[3]{8,9,10};
     int chx_values[8]{};
     int analog_out_pin{};
     bool state_change{false};
@@ -154,11 +158,11 @@ private:
     void setAddrPins (int ch_no) {
         // calculate 3 bit number from channel number to set addr pins high or low and address mux channel
         auto bit_calc = ch_no;
-        bool bit;
-        for (int idx : MUX_ADDR_PINS) {
-            bit = static_cast<bool>(bit_calc % 2);
-            bit_calc /= 2;
-            MCP_DIO.digitalWrite(idx, bit);
+        bool pin_HiLo;
+        for (auto pin_idx : MuxAddrPins) {
+            pin_HiLo = static_cast<bool>(bit_calc % 2);
+            bit_calc = bit_calc / 2;
+            MCP_DIO.digitalWrite(pin_idx, pin_HiLo);
         }
     }
 
@@ -178,11 +182,11 @@ Mux multiplexer_modules[NO_OF_MODULES];
  * functions
  */
 // controls
-void setEnvelopeDefault(AudioEffectEnvelope envDefault) {
-    envDefault.attack(15.0);
-    envDefault.decay(15.0);
-    envDefault.sustain(1);
-    envDefault.release(15.0);
+void setEnvelopeDefault(AudioEffectEnvelope* envDefault) {
+    envDefault->attack(15.0);
+    envDefault->decay(15.0);
+    envDefault->sustain(1);
+    envDefault->release(15.0);
 }
 
 // testing/debugging functions
@@ -256,8 +260,7 @@ void note_to_serial(const Note &name_note) {
 }
 
 // initialize note struct -> give correct note numbers and velocities to elements
-void init_key_notes()
-{
+void init_key_notes() {
     /* init key note_matrix
      * identified by in and output values when set and read via the mcp
      * each identifier is mapped to a note and velocity value
@@ -300,8 +303,7 @@ void init_key_notes()
 }
 
 // read keybed repetitively in loop, make sure this is fast! just updates the struct with key states and timers
-void keybed_read()
-{
+void keybed_read() {
     for (int out_idx = 8; out_idx < 16; out_idx++) {
         // set mcp pin high
         MCP_KEYS.digitalWrite(out_idx, HIGH);
@@ -320,8 +322,7 @@ void keybed_read()
 }
 
 // identifies note to play
-void note_update()
-{
+void note_update() {
     /**
      * need function that sends:
      * - > note on event when no note pressed previously (even if the last note off event is the same note!!!)
@@ -388,59 +389,74 @@ void muxControlChange(int mux_no, int ch_no, int value) {
     switch (mux_no) {
         case 0:
             // first multiplexer controls - ADSR
-            AudioEffectEnvelope ccEnvelope;
             if (ENVELOPE_TARGET_SWITCH) {
-                ccEnvelope = env_filter;
-                setEnvelopeDefault(env_pitch);
+                ccEnvelope = &env_filter;
+                setEnvelopeDefault(&env_pitch);
             }
             else {
-                ccEnvelope = env_pitch;
-                setEnvelopeDefault(env_filter);
+                ccEnvelope = &env_pitch;
+                setEnvelopeDefault(&env_filter);
             }
             switch (ch_no) {
                 case 0:
                     // ADSR - volume, attack
                     ADSR_vol.attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
+                    Serial.print("0 - Value change: ");
+                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
                 case 1:
                     // ADSR - volume, decay
                     ADSR_vol.decay(static_cast<float>(8000.0 * ccValue + 15.0));    // min 15ms to 8 sec
+                    Serial.print("1 - Value change: ");
+                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
                 case 2:
                     // ADSR - volume, sustain
                     ADSR_vol.sustain(ccValue);  // 0 to 1
+                    Serial.print("2 - Value change: ");
+                    Serial.println(ccValue);
                     break;
                 case 3:
                     // ADSR - volume, release
                     ADSR_vol.release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
+                    Serial.print("3 - Value change: ");
+                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
                 case 4:
                     // ADSR - modulation, attack
-                    ccEnvelope.attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
+                    ccEnvelope->attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
+                    Serial.print("4 - Value change: ");
+                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
                 case 5:
                     // ADSR - modulation, decay
-                    ccEnvelope.decay(static_cast<float>(8000.0 * ccValue + 15.0));    // min 15ms to 8 sec
+                    Serial.print("5 - Value change: ");
+                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
+                    ccEnvelope->decay(static_cast<float>(8000.0 * ccValue + 15.0));    // min 15ms to 8 sec
                     break;
                 case 6:
                     // ADSR - modulation, sustain
-                    ccEnvelope.release(ccValue);  // 0 to 1
+                    Serial.print("6 - Value change: ");
+                    Serial.println(ccValue);
+                    ccEnvelope->sustain(ccValue);  // 0 to 1
                     break;
                 case 7:
                     // ADSR - modulation, release
-                    ccEnvelope.release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
+                    Serial.print("7 - Value change: ");
+                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
+                    ccEnvelope->release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
                     break;
                 default:
                     break;
             }
             break;
-
+        /*
         case 1:
             // second multiplexer controls - Mixer
             switch (ch_no) {
                 case 0:
                     // OSC1 volume
-                    mix_osc.gain(0, 0.25 * ccValue);
+                    mix_osc.gain(0, static_cast<float>(0.25) * ccValue);
                     break;
                 case 1:
                     // OSC1 wave
@@ -453,19 +469,27 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                     break;
                 case 2:
                     // OSC2 volume
-                    mix_osc.gain(1, 0.25 * ccValue);
+                    mix_osc.gain(1, static_cast<float>(0.25) * ccValue);
                     break;
                 case 3:
                     // waveform & sub switch OSC2
                     waveform = 0;
                     break;
                 case 4:
+                    // OSC3 volume
+                    mix_osc.gain(2, static_cast<float>(0.25) * ccValue);
                     break;
                 case 5:
+                    // waveform & sub OSC3
+                    waveform = 0;
                     break;
                 case 6:
+                    // OSC4 volume
+                    mix_osc.gain(3, static_cast<float>(0.25) * ccValue);
                     break;
                 case 7:
+                    // detune
+                    detune = ccValue;
                     break;
                 default:
                     break;
@@ -474,12 +498,40 @@ void muxControlChange(int mux_no, int ch_no, int value) {
 
         case 2:
             // third multiplexer controls - lfo, lpf
+            switch (ch_no) {
+                case 0:
+                    // lfo 1 depth
+                    break;
+                case 1:
+                    // lfo 2 depth
+                    break;
+                case 2:
+                    // lfo 3 depth
+                    break;
+                case 3:
+                    // lpf resonance
+                    break;
+                case 4:
+                    // lfo 1 speed
+                    break;
+                case 5:
+                    // lfo 2 speed
+                    break;
+                case 6:
+                    // lfo 3 speed
+                    break;
+                case 7:
+                    // lpf cutoff
+                    break;
+                default:
+                    break;
+            }
             break;
 
         case 3:
             // fourth multiplexer controls - fx
             break;
-
+        */
         default:
             break;
     }
@@ -487,26 +539,34 @@ void muxControlChange(int mux_no, int ch_no, int value) {
 }
 
 
-void mux_update() {
-    if (UPDATE_TIMER >= UPDATE_INTERVAL) {
+void mux_update(unsigned int timingInterval) {
+    Mux* mpxcc;
+    if (UPDATE_TIMER >= timingInterval) {
         UPDATE_TIMER = 0;
+
         // set up loop
         if (!TOGGLE_MUX_SET_READ) {
-            for (auto mpx: multiplexer_modules) {
-                mpx.setAddrRead(false, MUX_READ_INDEX);
-            }
+            multiplexer_modules[0].setAddrRead(false, MUX_READ_INDEX);
         }
-
-        // reading loop
+//
+//        // reading loop
         else {
             for (int idx=0; idx<NO_OF_MODULES; idx++) {
-                multiplexer_modules[idx].setAddrRead(true, MUX_READ_INDEX);
+                mpxcc = &multiplexer_modules[idx];
+                mpxcc->setAddrRead(true, MUX_READ_INDEX);
                 // only trigger control changes when they occur
-                if (multiplexer_modules[idx].hasChanged()) {
-                    muxControlChange(idx, MUX_READ_INDEX, multiplexer_modules[idx].getChValue(MUX_READ_INDEX));
+                if (mpxcc->hasChanged()) {
+                    muxControlChange(idx, MUX_READ_INDEX, mpxcc->getChValue(MUX_READ_INDEX));
                 }
             }
             MUX_READ_INDEX++;
+            Serial.println("Mux 1 values: ");
+            Serial.print("\t \t");
+            for (int debidx=0; debidx<8; debidx++) {
+                Serial.print(" \t");
+                Serial.print(multiplexer_modules[0].getChValue(debidx));
+            }
+            Serial.println(" ");
         }
         TOGGLE_MUX_SET_READ = !TOGGLE_MUX_SET_READ;     // switch between setup and read
 
@@ -520,6 +580,7 @@ void mux_update() {
  */
 void setup()
 {
+    delay(3000);
     // setup hardware
     Serial.begin(9600);
     AudioMemory(300);
@@ -545,6 +606,7 @@ void setup()
     MCP_DIO.begin(1);
     for (int mux_idx = 8; mux_idx < 11; mux_idx++) {
         MCP_DIO.pinMode(mux_idx, OUTPUT);
+        MCP_DIO.digitalWrite(mux_idx, LOW);
     }
 }
 
@@ -552,4 +614,5 @@ void loop()
 {
     keybed_read();
     note_update();
+    mux_update(UPDATE_INTERVAL);       // runs with update rate
 }
