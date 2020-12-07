@@ -3,6 +3,8 @@
 #include "wiring.h"
 // include audio system design tool code
 #include "audio_system.h"
+#include "note.h"
+#include "mux.h"
 
 /**
  * Global variables
@@ -39,142 +41,9 @@ float detune = 0.0;
 // envelopes
 AudioEffectEnvelope* ccEnvelope;     // pointer?
 
-/**
- * Class description for mapping keybed to notes, saving:
- * note value
- * velocity value
- * state of button
- * timer last pressed if on
- */
-class Note
-{
-public:
-    Note() : push_state(false), note_value(0), velocity_value(0), last_press_timer(0) {   };
-
-    void setNoteValues(byte no_val, byte vel_val)
-    {
-        note_value = no_val;
-        velocity_value = vel_val;
-    }
-
-    // We declare this method "const" because it doesn't "change" the note object. It
-    // just returns information.
-    bool isPressed() const
-    {
-        return push_state;
-    }
-
-    void setPush(bool state)
-    {
-        /** If we already have the new state, which means either a key was pressed before and
-         * is still pressed now, or a key was not pressed before and is not pressed now either,
-         * then we simply do nothing.
-         */
-        if (state == push_state) {
-            return;
-        }
-
-        // Now, we are sure that the state of the key has changed...
-        push_state = state;
-
-        /**
-         * ... that means if the key is pressed now, we not only set its state to true, but
-         * we also start the timer on it.
-         */
-        if (push_state) {
-            last_press_timer = micros();
-            // send midi on event
-        }
-            /**
-             * Otherwise, when the key was released, we reset the timer to 0
-             */
-        else {
-            last_press_timer = 0;
-            // send midi off event
-        }
-    }
-
-    unsigned int getTime() const
-    {
-        return last_press_timer;
-    }
-
-    byte get_note() const
-    {
-        return note_value;
-    }
-
-    byte get_velocity() const
-    {
-        return velocity_value;
-    }
-
-private:
-    bool push_state;
-    byte note_value;
-    byte velocity_value;
-    unsigned int last_press_timer;
-};
-
 // create array of notes and current note
 Note notes[NO_OF_KEYS];
 static Note CURRENT_NOTE;
-
-class Mux {
-public:
-    Mux() : chx_values(), analog_out_pin(), state_change() {};
-    // number of multiplexer modules for analog read ins, default values from design
-
-    void setAnalogOut(int a_pin) {
-        // set the output pin of the object
-        analog_out_pin = a_pin;
-    }
-
-    void setAddrRead(bool toggle_read, int ch_no) {
-        if (toggle_read) {
-            // read values
-            read(ch_no);
-        }
-        else {
-            // set addr pins
-            setAddrPins(ch_no);
-        }
-    }
-
-    int getChValue (int ch_no) const {
-        return chx_values[ch_no];
-    }
-
-    bool hasChanged() const {
-        return state_change;
-    }
-
-private:
-    const int MuxAddrPins[3]{8,9,10};
-    int chx_values[8]{};
-    int analog_out_pin{};
-    bool state_change{false};
-
-    void setAddrPins (int ch_no) {
-        // calculate 3 bit number from channel number to set addr pins high or low and address mux channel
-        auto bit_calc = ch_no;
-        bool pin_HiLo;
-        for (auto pin_idx : MuxAddrPins) {
-            pin_HiLo = static_cast<bool>(bit_calc % 2);
-            bit_calc = bit_calc / 2;
-            MCP_DIO.digitalWrite(pin_idx, pin_HiLo);
-        }
-    }
-
-    void read (int ch_no) {
-        auto read_value = abs(RES_RANGE - analogRead(analog_out_pin));
-        if (read_value != chx_values[ch_no]) {
-            chx_values[ch_no] = read_value;
-            state_change = true;
-        }
-        else state_change = false;
-    }
-};
 
 Mux multiplexer_modules[NO_OF_MODULES];
 
@@ -546,14 +415,14 @@ void mux_update(unsigned int timingInterval) {
 
         // set up loop
         if (!TOGGLE_MUX_SET_READ) {
-            multiplexer_modules[0].setAddrRead(false, MUX_READ_INDEX);
+            multiplexer_modules[0].setAddrRead(false, MUX_READ_INDEX, MCP_DIO);
         }
 //
 //        // reading loop
         else {
             for (int idx=0; idx<NO_OF_MODULES; idx++) {
                 mpxcc = &multiplexer_modules[idx];
-                mpxcc->setAddrRead(true, MUX_READ_INDEX);
+                mpxcc->setAddrRead(true, MUX_READ_INDEX, MCP_DIO);
                 // only trigger control changes when they occur
                 if (mpxcc->hasChanged()) {
                     muxControlChange(idx, MUX_READ_INDEX, mpxcc->getChValue(MUX_READ_INDEX));
