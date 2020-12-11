@@ -5,6 +5,7 @@
 #include "audio_system.h"
 #include "note.h"
 #include "mux.h"
+#include <Bounce.h>
 
 /**
  * Global variables
@@ -16,13 +17,29 @@ constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle swi
 // analog reading
 constexpr u_int8_t READ_RES_BIT_DEPTH = 10;  // bit depth of reading resolution
 int RES_RANGE = (int) pow(2, READ_RES_BIT_DEPTH) - 1;  // analog reading range, dependent on bit depth
-elapsedMillis UPDATE_TIMER;
+elapsedMicros UPDATE_TIMER;
+
 // multiplexers
-unsigned int UPDATE_INTERVAL = 2;       // [ms] reading interval for analog inputs through multiplexers
+unsigned int UPDATE_INTERVAL = 200;       // [us] reading interval for analog inputs through multiplexers
 constexpr u_int8_t NO_OF_MODULES = 4;
 int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 32};
 bool TOGGLE_MUX_SET_READ = false;       // toggle between setting and reading mux
 int MUX_READ_INDEX = 0;
+
+// digital IO
+elapsedMillis UPDATE_TIMER_2;  // no need to do this every loop
+unsigned int UPDATE_INTERVAL_2 = 5;  // [ms]
+elapsedMicros SYNC_TIMER;
+// pins
+const int pinLedSync = 25;
+Bounce pinOctRight = Bounce(26, 10);
+Bounce pinOctLeft = Bounce(27, 10);
+const int pinTempoLeft = 28;
+const int pinTempoRight = 29;
+Bounce pinTempoTap = Bounce(30, 10);
+const int pinEnvLeft = 3;
+const int pinEnvRight = 4;
+int octControlToggle = 5;
 
 // note & midi interfacing
 constexpr byte HALF_VEL = 90;
@@ -37,6 +54,7 @@ int oscWaveState[3] = {0, 0, 0};
 short oscWaveForms[4] = {WAVEFORM_SINE, WAVEFORM_SQUARE, WAVEFORM_TRIANGLE, WAVEFORM_SAWTOOTH};
 bool ENVELOPE_TARGET_SWITCH = false;
 float detune = 0.0;
+int octave = 0;
 
 // envelopes
 AudioEffectEnvelope* ccEnvelope;     // pointer?
@@ -253,7 +271,7 @@ void init_mux() {
 }
 
 void muxControlChange(int mux_no, int ch_no, int value) {
-    float ccValue = static_cast<float>(value) / static_cast<float>(RES_RANGE);  // 0 to 1
+    float ccValue = static_cast<float>(1) - static_cast<float>(value) / static_cast<float>(RES_RANGE);  // 0 to 1
     int waveform;
     switch (mux_no) {
         case 0:
@@ -282,55 +300,58 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                 case 2:
                     // ADSR - volume, sustain
                     ADSR_vol.sustain(ccValue);  // 0 to 1
-                    Serial.print("2 - Value change: ");
-                    Serial.println(ccValue);
+                    // Serial.print("2 - Value change: ");
+                    // Serial.println(ccValue);
                     break;
                 case 3:
                     // ADSR - volume, release
                     ADSR_vol.release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
-                    Serial.print("3 - Value change: ");
-                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
+                    // Serial.print("3 - Value change: ");
+                    // Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
                 case 4:
                     // ADSR - modulation, attack
                     ccEnvelope->attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
-                    Serial.print("4 - Value change: ");
-                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
+                    // Serial.print("4 - Value change: ");
+                    // Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
                 case 5:
                     // ADSR - modulation, decay
-                    Serial.print("5 - Value change: ");
-                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
+                    // Serial.print("5 - Value change: ");
+                    // Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     ccEnvelope->decay(static_cast<float>(8000.0 * ccValue + 15.0));    // min 15ms to 8 sec
                     break;
                 case 6:
                     // ADSR - modulation, sustain
-                    Serial.print("6 - Value change: ");
-                    Serial.println(ccValue);
+                    // Serial.print("6 - Value change: ");
+                    // Serial.println(ccValue);
                     ccEnvelope->sustain(ccValue);  // 0 to 1
                     break;
                 case 7:
                     // ADSR - modulation, release
-                    Serial.print("7 - Value change: ");
-                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
+                    // Serial.print("7 - Value change: ");
+                    // Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     ccEnvelope->release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
                     break;
                 default:
                     break;
             }
             break;
-        /*
         case 1:
             // second multiplexer controls - Mixer
             switch (ch_no) {
                 case 0:
                     // OSC1 volume
                     mix_osc.gain(0, static_cast<float>(0.25) * ccValue);
+//                    Serial.print("0 - Value change: ");
+//                    Serial.println(static_cast<float>(0.25) * ccValue);
                     break;
                 case 1:
                     // OSC1 wave
-                    waveform = map(static_cast<int>(ccValue) * RES_RANGE, 0, RES_RANGE, 0, 3);
+                    waveform = static_cast<int>(map(ccValue * 22, 0, 15, 0, 4));
                     // switch only upon change (mux object change detection in finer detail)
+//                    Serial.print("1 - Value change: ");
+//                    Serial.println(waveform);
                     if (waveform != oscWaveState[0]) {
                         oscWaveState[0] = waveform;
                         OSC1.begin(oscWaveForms[waveform]);
@@ -339,26 +360,48 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                 case 2:
                     // OSC2 volume
                     mix_osc.gain(1, static_cast<float>(0.25) * ccValue);
+                    Serial.print("2 - Value change: ");
+                    Serial.println(static_cast<float>(0.25) * ccValue);
                     break;
                 case 3:
-                    // waveform & sub switch OSC2
-                    waveform = 0;
+                    // OSC2 wave
+                    waveform = static_cast<int>(map(ccValue * 22, 0, 15, 0, 4));
+                    // switch only upon change (mux object change detection in finer detail)
+                    Serial.print("3 - Value change: ");
+                    Serial.println(waveform);
+                    if (waveform != oscWaveState[1]) {
+                        oscWaveState[1] = waveform;
+                        OSC2.begin(oscWaveForms[waveform]);
+                    }
                     break;
                 case 4:
                     // OSC3 volume
                     mix_osc.gain(2, static_cast<float>(0.25) * ccValue);
+                    Serial.print("4 - Value change: ");
+                    Serial.println(static_cast<float>(0.25) * ccValue);
                     break;
                 case 5:
-                    // waveform & sub OSC3
-                    waveform = 0;
+                    // OSC3 wave
+                    waveform = static_cast<int>(map(ccValue * 22, 0, 15, 0, 4));
+                    // switch only upon change (mux object change detection in finer detail)
+                    Serial.print("5 - Value change: ");
+                    Serial.println(waveform);
+                    if (waveform != oscWaveState[2]) {
+                        oscWaveState[2] = waveform;
+                        OSC3.begin(oscWaveForms[waveform]);
+                    }
                     break;
                 case 6:
                     // OSC4 volume
                     mix_osc.gain(3, static_cast<float>(0.25) * ccValue);
+                    // Serial.print("6 - Value change: ");
+                    // Serial.println(static_cast<float>(0.25) * ccValue);
                     break;
                 case 7:
                     // detune
                     detune = ccValue;
+                    // Serial.print("7 - Value change: ");
+                    // Serial.println(ccValue);
                     break;
                 default:
                     break;
@@ -370,27 +413,43 @@ void muxControlChange(int mux_no, int ch_no, int value) {
             switch (ch_no) {
                 case 0:
                     // lfo 1 depth
+                    // Serial.print("0 - Value change: ");
+                    // Serial.println(ccValue);
                     break;
                 case 1:
                     // lfo 2 depth
+                    // Serial.print("1 - Value change: ");
+                    // Serial.println(ccValue);
                     break;
                 case 2:
                     // lfo 3 depth
+                    // Serial.print("2 - Value change: ");
+                    // Serial.println(ccValue);
                     break;
                 case 3:
                     // lpf resonance
+                    // Serial.print("3 - Value change: ");
+                    // Serial.println(ccValue);
                     break;
                 case 4:
                     // lfo 1 speed
+                    // Serial.print("4 - Value change: ");
+                    // Serial.println(ccValue);
                     break;
                 case 5:
                     // lfo 2 speed
+                    // Serial.print("5 - Value change: ");
+                    // Serial.println(ccValue);
                     break;
                 case 6:
                     // lfo 3 speed
+                    // Serial.print("6 - Value change: ");
+                    // Serial.println(ccValue);
                     break;
                 case 7:
                     // lpf cutoff
+                    // Serial.print("7 - Value change: ");
+                    // Serial.println(ccValue);
                     break;
                 default:
                     break;
@@ -399,22 +458,49 @@ void muxControlChange(int mux_no, int ch_no, int value) {
 
         case 3:
             // fourth multiplexer controls - fx
+            switch (ch_no) {
+                case 0:
+                    // Serial.print("0 - Value change: ");
+                    // Serial.println(ccValue);
+                    break;
+                case 1:
+                    // Serial.print("1 - Value change: ");
+                    // Serial.println(ccValue);
+                    break;
+                case 3:
+                    // Serial.print("2 - Value change: ");
+                    // Serial.println(ccValue);
+                    break;
+                case 4:
+                    // Serial.print("3 - Value change: ");
+                    // Serial.println(ccValue);
+                    break;
+                case 6:
+                    // Serial.print("4 - Value change: ");
+                    // Serial.println(ccValue);
+                    break;
+                case 7:
+                    // Serial.print("5 - Value change: ");
+                    // Serial.println(ccValue);
+                    break;
+                default:
+                    break;
+            }
             break;
-        */
         default:
             break;
     }
 
 }
 
-
-void mux_update(unsigned int timingInterval) {
+void mux_update(const unsigned int * timingInterval) {
     Mux* mpxcc;
-    if (UPDATE_TIMER >= timingInterval) {
+    if (UPDATE_TIMER >= *timingInterval) {
         UPDATE_TIMER = 0;
 
         // set up loop
         if (!TOGGLE_MUX_SET_READ) {
+            // setup address of mux object
             multiplexer_modules[0].setAddrRead(false, MUX_READ_INDEX, MCP_DIO);
         }
 //
@@ -422,6 +508,7 @@ void mux_update(unsigned int timingInterval) {
         else {
             for (int idx=0; idx<NO_OF_MODULES; idx++) {
                 mpxcc = &multiplexer_modules[idx];
+                // setup read of mux object
                 mpxcc->setAddrRead(true, MUX_READ_INDEX, MCP_DIO);
                 // only trigger control changes when they occur
                 if (mpxcc->hasChanged()) {
@@ -429,13 +516,6 @@ void mux_update(unsigned int timingInterval) {
                 }
             }
             MUX_READ_INDEX++;
-            Serial.println("Mux 1 values: ");
-            Serial.print("\t \t");
-            for (int debidx=0; debidx<8; debidx++) {
-                Serial.print(" \t");
-                Serial.print(multiplexer_modules[0].getChValue(debidx));
-            }
-            Serial.println(" ");
         }
         TOGGLE_MUX_SET_READ = !TOGGLE_MUX_SET_READ;     // switch between setup and read
 
@@ -443,6 +523,45 @@ void mux_update(unsigned int timingInterval) {
         if (MUX_READ_INDEX >= 8) MUX_READ_INDEX = 0;
     }
 }
+
+/**
+ * D IO control
+ * normal breakout pins,
+ * LED sync -> p# 25
+ * octave switch -> p# 26,27
+ * tempo switch -> p# 28,29
+ * tap tempo -> p# 30
+ * Envelope switch -> p# 3,4
+ */
+int octave_update() {
+    pinOctLeft.update();
+    pinOctRight.update();
+    if (pinOctRight.fallingEdge()){
+        if (octControlToggle < 7) {
+            MCP_DIO.digitalWrite(octControlToggle, LOW);
+            octControlToggle++;
+            MCP_DIO.digitalWrite(octControlToggle, HIGH);
+        }
+    }
+    if (pinOctLeft.fallingEdge()) {
+        if (octControlToggle > 3) {
+            MCP_DIO.digitalWrite(octControlToggle, LOW);
+            octControlToggle--;
+            MCP_DIO.digitalWrite(octControlToggle, HIGH);
+        }
+    }
+    return octControlToggle - 5;  // changes oct switch ranging from -2 to 2
+}
+
+void switchDioControlChange(const unsigned int * timingInterval, const unsigned int * timingSync) {
+    if (UPDATE_TIMER_2 >= *timingInterval) {
+        // check octave switch
+        octave = octave_update();
+        //
+    }
+}
+
+
 
 /**
  * program
@@ -473,15 +592,21 @@ void setup()
     }
 
     MCP_DIO.begin(1);
-    for (int mux_idx = 8; mux_idx < 11; mux_idx++) {
+    for (int mux_idx = 3; mux_idx < 11; mux_idx++) {
         MCP_DIO.pinMode(mux_idx, OUTPUT);
         MCP_DIO.digitalWrite(mux_idx, LOW);
     }
+    MCP_DIO.digitalWrite(octControlToggle, HIGH);
+
+    // initialize Digital IO pins
+    pinMode(26, INPUT_PULLUP);
+    pinMode(27, INPUT_PULLUP);
 }
 
 void loop()
 {
     keybed_read();
     note_update();
-    mux_update(UPDATE_INTERVAL);       // runs with update rate
+    mux_update(&UPDATE_INTERVAL);       // runs with update rate
+    switchDioControlChange(&UPDATE_INTERVAL_2, &UPDATE_INTERVAL_2);
 }
