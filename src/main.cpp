@@ -29,7 +29,7 @@ int MUX_READ_INDEX = 0;
 // digital IO
 elapsedMillis UPDATE_TIMER_2;  // no need to do this every loop
 unsigned int UPDATE_INTERVAL_2 = 5;  // [ms]
-elapsedMicros SYNC_TIMER;
+elapsedMillis SYNC_TIMER;
 // pins
 const int pinLedSync = 25;
 Bounce pinOctRight = Bounce(26, 10);
@@ -40,6 +40,7 @@ Bounce pinTempoTap = Bounce(30, 10);
 const int pinEnvLeft = 3;
 const int pinEnvRight = 4;
 int octControlToggle = 5;
+bool toggleLedSync = false;
 
 // note & midi interfacing
 constexpr byte HALF_VEL = 90;
@@ -52,9 +53,12 @@ Adafruit_MCP23017 MCP_DIO;      // gpio expander, handling multiplexer switches 
 // osc
 int oscWaveState[3] = {0, 0, 0};
 short oscWaveForms[4] = {WAVEFORM_SINE, WAVEFORM_SQUARE, WAVEFORM_TRIANGLE, WAVEFORM_SAWTOOTH};
-bool ENVELOPE_TARGET_SWITCH = false;
 float detune = 0.0;
 int octave = 0;
+int subOsc2 = 0;
+int subOsc3 = 0;
+// volume
+const int fadeTime = 15;        // fade timer upon velocity changes = shortest envelope ramp
 
 // envelopes
 AudioEffectEnvelope* ccEnvelope;     // pointer?
@@ -62,12 +66,20 @@ AudioEffectEnvelope* ccEnvelope;     // pointer?
 // create array of notes and current note
 Note notes[NO_OF_KEYS];
 static Note CURRENT_NOTE;
+const Note NULL_NOTE;
 
 Mux multiplexer_modules[NO_OF_MODULES];
 
 /**
  * functions
  */
+// calculate frequency given midi note value
+float midi2freq(int note_number){
+    float temp = static_cast<float>(note_number - 69) / static_cast<float>(12);
+    return static_cast<float>(440 * pow(2, temp));
+}
+
+
 // controls
 void setEnvelopeDefault(AudioEffectEnvelope* envDefault) {
     envDefault->attack(15.0);
@@ -208,6 +220,36 @@ void keybed_read() {
     }
 }
 
+// set frequencies, play notes
+void setOsc(const Note & note2set, const int * octave2set, const int * sub1, const int * sub2) {
+    // calculate freq from midi note and set
+    OSC1.frequency(midi2freq(*octave2set * 12 + note2set.get_note()));
+    OSC2.frequency(midi2freq(*octave2set * 12 + *sub1 * 12 + note2set.get_note()));
+    OSC3.frequency(midi2freq(*octave2set * 12 + *sub2 * 12 + note2set.get_note()));
+    pink.noteOn(midi2freq(*octave2set * 12 + note2set.get_note()), 0.8);
+    if (note2set.get_velocity() == 127) {
+        vel_change_high.fadeIn(fadeTime);
+        vel_change_low.fadeOut(fadeTime);
+    }
+    else {
+        vel_change_high.fadeOut(fadeTime);
+        vel_change_low.fadeIn(fadeTime);
+    }
+}
+
+void playNote(const Note note2play) {
+    // set OSCs
+    setOsc(note2play, &octave, &subOsc2, &subOsc3);
+    // start envelopes
+}
+
+void stopNote() {
+    // set OSCs zero note?
+    setOsc(NULL_NOTE, &octave, &subOsc2, &subOsc3);
+    pink.noteOff(0.8);
+    // stop envelopes
+}
+
 // identifies note to play
 void note_update() {
     /**
@@ -224,21 +266,27 @@ void note_update() {
      */
     for (const auto &note: notes) {
         if (note.isPressed() && (note.getTime() > CURRENT_NOTE.getTime())) {
+            setOsc(note, &octave, &subOsc2, &subOsc3);
             if (note.get_note() == CURRENT_NOTE.get_note()) {
                 // same note value
                 Serial.println("no new event");
-                // only velocity change, no new note event
+                // Velocity change
+
             }
-            CURRENT_NOTE = note;
-            // send play event
+            else {
+                // send play event
+                playNote(note);
+            }
             note_to_serial(note);
+            CURRENT_NOTE = note;
         }
 
         // in case were in search mode, ie toggled loop to find other pressed notes
         if (note.isPressed() && TOGGLE_LOOP) {
+            setOsc(note, &octave, &subOsc2, &subOsc3);      // changes pitch and velocity,
             if (note.get_note() == CURRENT_NOTE.get_note()) {
-                // same note value
-                // only velocity change, no new note event
+                // same note value -> only need a solution if pitch change to same pitch is faulty
+                // Velocity change
                 Serial.println("no new event");
             }
             CURRENT_NOTE = note;
@@ -256,6 +304,7 @@ void note_update() {
                 CURRENT_NOTE.setPush(false);  // makes sure timer is reset -> solves case for same note going off and on again
                 Serial.println("last off event");
                 // send stop event
+                stopNote();
             }
         }
     }
@@ -275,15 +324,6 @@ void muxControlChange(int mux_no, int ch_no, int value) {
     int waveform;
     switch (mux_no) {
         case 0:
-            // first multiplexer controls - ADSR
-            if (ENVELOPE_TARGET_SWITCH) {
-                ccEnvelope = &env_filter;
-                setEnvelopeDefault(&env_pitch);
-            }
-            else {
-                ccEnvelope = &env_pitch;
-                setEnvelopeDefault(&env_filter);
-            }
             switch (ch_no) {
                 case 0:
                     // ADSR - volume, attack
@@ -494,6 +534,7 @@ void muxControlChange(int mux_no, int ch_no, int value) {
 }
 
 void mux_update(const unsigned int * timingInterval) {
+
     Mux* mpxcc;
     if (UPDATE_TIMER >= *timingInterval) {
         UPDATE_TIMER = 0;
@@ -510,6 +551,8 @@ void mux_update(const unsigned int * timingInterval) {
                 mpxcc = &multiplexer_modules[idx];
                 // setup read of mux object
                 mpxcc->setAddrRead(true, MUX_READ_INDEX, MCP_DIO);
+                // to do: implement filter for read!!
+
                 // only trigger control changes when they occur
                 if (mpxcc->hasChanged()) {
                     muxControlChange(idx, MUX_READ_INDEX, mpxcc->getChValue(MUX_READ_INDEX));
@@ -553,15 +596,49 @@ int octave_update() {
     return octControlToggle - 5;  // changes oct switch ranging from -2 to 2
 }
 
-void switchDioControlChange(const unsigned int * timingInterval, const unsigned int * timingSync) {
+void switchDioControlChange(const unsigned int * timingInterval, const unsigned int timingSync) {
     if (UPDATE_TIMER_2 >= *timingInterval) {
         // check octave switch
         octave = octave_update();
-        //
+
+        // check enevlope switch
+        if (digitalRead(pinEnvLeft) == LOW) {
+            ccEnvelope = &env_filter;
+            setEnvelopeDefault(&env_pitch);
+        }
+        else if (digitalRead(pinEnvRight) ==LOW) {
+            ccEnvelope = &env_pitch;
+            setEnvelopeDefault(&env_filter);
+        }
+        else {
+            // ccEnvelope = null?!
+            setEnvelopeDefault(&env_filter);
+            setEnvelopeDefault(&env_pitch);
+        }
+
+        // check tempo switch
+        if (digitalRead(pinTempoLeft) == LOW) {
+            // sync to midi
+        }
+        else if (digitalRead(pinTempoRight) ==LOW) {
+            // sync to knob
+        }
+        else {
+            // sync to tap
+        }
+    }
+    // sync LED switch
+    if (SYNC_TIMER >= timingSync) {
+        SYNC_TIMER = 0;
+        digitalWrite(pinLedSync, HIGH);
+        toggleLedSync = true;
+    }
+    if (SYNC_TIMER >= 50 && toggleLedSync) {
+        // blink light for 50 ms
+        digitalWrite(pinLedSync, LOW);
+        toggleLedSync = false;
     }
 }
-
-
 
 /**
  * program
@@ -601,6 +678,14 @@ void setup()
     // initialize Digital IO pins
     pinMode(26, INPUT_PULLUP);
     pinMode(27, INPUT_PULLUP);
+
+    pinMode(pinLedSync, OUTPUT);
+
+    // Initialize OSC
+    OSC1.begin(oscWaveForms[oscWaveState[0]], 0.0, 1.0);
+    OSC2.begin(oscWaveForms[oscWaveState[1]], 0.0, 1.0);
+    OSC3.begin(oscWaveForms[oscWaveState[2]], 0.0, 1.0);
+    pink.noteOn(0, 0.8);
 }
 
 void loop()
@@ -608,5 +693,5 @@ void loop()
     keybed_read();
     note_update();
     mux_update(&UPDATE_INTERVAL);       // runs with update rate
-    switchDioControlChange(&UPDATE_INTERVAL_2, &UPDATE_INTERVAL_2);
+    switchDioControlChange(&UPDATE_INTERVAL_2, 670);
 }
