@@ -20,7 +20,7 @@ int RES_RANGE = (int) pow(2, READ_RES_BIT_DEPTH) - 1;  // analog reading range, 
 elapsedMicros UPDATE_TIMER;
 
 // multiplexers
-unsigned int UPDATE_INTERVAL = 200;       // [us] reading interval for analog inputs through multiplexers
+unsigned int UPDATE_INTERVAL = 500;       // [us] reading interval for analog inputs through multiplexers
 constexpr u_int8_t NO_OF_MODULES = 4;
 int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 32};
 bool TOGGLE_MUX_SET_READ = false;       // toggle between setting and reading mux
@@ -682,9 +682,9 @@ void setup()
     pinMode(pinLedSync, OUTPUT);
 
     // Initialize OSC
-    OSC1.begin(oscWaveForms[oscWaveState[0]], 0.0, 1.0);
-    OSC2.begin(oscWaveForms[oscWaveState[1]], 0.0, 1.0);
-    OSC3.begin(oscWaveForms[oscWaveState[2]], 0.0, 1.0);
+    OSC1.begin(1.0, 0.0, oscWaveForms[oscWaveState[0]]);
+    OSC2.begin(1.0, 0.0, oscWaveForms[oscWaveState[1]]);
+    OSC3.begin(1.0, 0.0, oscWaveForms[oscWaveState[2]]);
     pink.noteOn(0, 0.8);
 }
 
