@@ -10,6 +10,10 @@
 /**
  * Global variables
  */
+ // DEBUG
+elapsedMicros DEBUG_TIMER_MUX;
+elapsedMillis DEBUG_TIMER_KEYS;
+
 // keybed
 Adafruit_MCP23017 MCP_KEYS;     // gpio expander handling keyboard
 constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle switches
@@ -21,7 +25,7 @@ elapsedMicros UPDATE_TIMER;
 
 // multiplexers
 unsigned int UPDATE_INTERVAL = 100;       // [us] reading interval for analog inputs through multiplexers
-elapsedMicros DEBUG_TIMER;
+
 constexpr u_int8_t NO_OF_MODULES = 4;
 int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 32};
 bool TOGGLE_MUX_SET_READ = false;       // toggle between setting and reading mux
@@ -329,14 +333,14 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                 case 0:
                     // ADSR - volume, attack
                     ADSR_vol.attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
-                    Serial.print("0 - Value change: ");
-                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
+//                    Serial.print("0 - Value change: ");
+//                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
                 case 1:
                     // ADSR - volume, decay
                     ADSR_vol.decay(static_cast<float>(8000.0 * ccValue + 15.0));    // min 15ms to 8 sec
-                    Serial.print("1 - Value change: ");
-                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
+//                    Serial.print("1 - Value change: ");
+//                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
                 case 2:
                     // ADSR - volume, sustain
@@ -384,8 +388,8 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                 case 0:
                     // OSC1 volume
                     mix_osc.gain(0, static_cast<float>(0.25) * ccValue);
-                    Serial.print("0 - Value change: ");
-                    Serial.println(static_cast<float>(0.25) * ccValue);
+//                    Serial.print("0 - Value change: ");
+//                    Serial.println(static_cast<float>(0.25) * ccValue);
                     break;
                 case 1:
                     // OSC1 wave
@@ -548,7 +552,7 @@ void mux_update(const unsigned int * timingInterval) {
 //
 //        // reading loop
         else {
-            DEBUG_TIMER = 0;
+            DEBUG_TIMER_MUX = 0;
             for (int idx=0; idx<NO_OF_MODULES; idx++) {
                 mpxcc = &multiplexer_modules[idx];
                 // setup read of mux object
@@ -561,8 +565,6 @@ void mux_update(const unsigned int * timingInterval) {
                 }
             }
             MUX_READ_INDEX++;
-            Serial.print("debug read timing [us]: ");
-            Serial.println(DEBUG_TIMER);
         }
         TOGGLE_MUX_SET_READ = !TOGGLE_MUX_SET_READ;     // switch between setup and read
 
@@ -597,7 +599,7 @@ int octave_update() {
             MCP_DIO.digitalWrite(octControlToggle, HIGH);
         }
     }
-    return octControlToggle - 5;  // changes oct switch ranging from -2 to 2
+    return - (octControlToggle - 5);  // changes oct switch ranging from -2 to 2
 }
 
 void switchDioControlChange(const unsigned int * timingInterval, const unsigned int timingSync) {
@@ -654,8 +656,16 @@ void setup()
     AudioMemory(100);
     sgtl5000_1.enable();
     sgtl5000_1.volume(0.5);
+
+    // ADCs
+    pinMode(A13, INPUT);
+    pinMode(A14, INPUT);
+    pinMode(A15, INPUT);        // pin no 34
+    pinMode(A16, INPUT);       // pin no 35
+
     analogReadResolution(READ_RES_BIT_DEPTH);  // also here, 12 bit would mean 0 - 4096 value range in analog read
     analogReadAveraging(8);
+
     // initialize keys
     init_key_notes();
     // initialize mux objects
@@ -692,7 +702,7 @@ void setup()
 }
 
 void loop()
-{
+{   DEBUG_TIMER_KEYS = 0;
     keybed_read();
     note_update();
     mux_update(&UPDATE_INTERVAL);       // runs with update rate
