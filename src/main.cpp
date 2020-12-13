@@ -15,12 +15,13 @@ Adafruit_MCP23017 MCP_KEYS;     // gpio expander handling keyboard
 constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle switches
 
 // analog reading
-constexpr u_int8_t READ_RES_BIT_DEPTH = 10;  // bit depth of reading resolution
+constexpr u_int8_t READ_RES_BIT_DEPTH = 8;  // bit depth of reading resolution
 int RES_RANGE = (int) pow(2, READ_RES_BIT_DEPTH) - 1;  // analog reading range, dependent on bit depth
 elapsedMicros UPDATE_TIMER;
 
 // multiplexers
-unsigned int UPDATE_INTERVAL = 500;       // [us] reading interval for analog inputs through multiplexers
+unsigned int UPDATE_INTERVAL = 100;       // [us] reading interval for analog inputs through multiplexers
+elapsedMicros DEBUG_TIMER;
 constexpr u_int8_t NO_OF_MODULES = 4;
 int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 32};
 bool TOGGLE_MUX_SET_READ = false;       // toggle between setting and reading mux
@@ -383,8 +384,8 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                 case 0:
                     // OSC1 volume
                     mix_osc.gain(0, static_cast<float>(0.25) * ccValue);
-//                    Serial.print("0 - Value change: ");
-//                    Serial.println(static_cast<float>(0.25) * ccValue);
+                    Serial.print("0 - Value change: ");
+                    Serial.println(static_cast<float>(0.25) * ccValue);
                     break;
                 case 1:
                     // OSC1 wave
@@ -400,15 +401,15 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                 case 2:
                     // OSC2 volume
                     mix_osc.gain(1, static_cast<float>(0.25) * ccValue);
-                    Serial.print("2 - Value change: ");
-                    Serial.println(static_cast<float>(0.25) * ccValue);
+//                    Serial.print("2 - Value change: ");
+//                    Serial.println(static_cast<float>(0.25) * ccValue);
                     break;
                 case 3:
                     // OSC2 wave
                     waveform = static_cast<int>(map(ccValue * 22, 0, 15, 0, 4));
                     // switch only upon change (mux object change detection in finer detail)
-                    Serial.print("3 - Value change: ");
-                    Serial.println(waveform);
+//                    Serial.print("3 - Value change: ");
+//                    Serial.println(waveform);
                     if (waveform != oscWaveState[1]) {
                         oscWaveState[1] = waveform;
                         OSC2.begin(oscWaveForms[waveform]);
@@ -417,15 +418,15 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                 case 4:
                     // OSC3 volume
                     mix_osc.gain(2, static_cast<float>(0.25) * ccValue);
-                    Serial.print("4 - Value change: ");
-                    Serial.println(static_cast<float>(0.25) * ccValue);
+//                    Serial.print("4 - Value change: ");
+//                    Serial.println(static_cast<float>(0.25) * ccValue);
                     break;
                 case 5:
                     // OSC3 wave
                     waveform = static_cast<int>(map(ccValue * 22, 0, 15, 0, 4));
                     // switch only upon change (mux object change detection in finer detail)
-                    Serial.print("5 - Value change: ");
-                    Serial.println(waveform);
+//                    Serial.print("5 - Value change: ");
+//                    Serial.println(waveform);
                     if (waveform != oscWaveState[2]) {
                         oscWaveState[2] = waveform;
                         OSC3.begin(oscWaveForms[waveform]);
@@ -547,6 +548,7 @@ void mux_update(const unsigned int * timingInterval) {
 //
 //        // reading loop
         else {
+            DEBUG_TIMER = 0;
             for (int idx=0; idx<NO_OF_MODULES; idx++) {
                 mpxcc = &multiplexer_modules[idx];
                 // setup read of mux object
@@ -559,6 +561,8 @@ void mux_update(const unsigned int * timingInterval) {
                 }
             }
             MUX_READ_INDEX++;
+            Serial.print("debug read timing [us]: ");
+            Serial.println(DEBUG_TIMER);
         }
         TOGGLE_MUX_SET_READ = !TOGGLE_MUX_SET_READ;     // switch between setup and read
 
@@ -645,14 +649,13 @@ void switchDioControlChange(const unsigned int * timingInterval, const unsigned 
  */
 void setup()
 {
-    delay(3000);
     // setup hardware
     Serial.begin(9600);
-    AudioMemory(300);
+    AudioMemory(100);
     sgtl5000_1.enable();
     sgtl5000_1.volume(0.5);
     analogReadResolution(READ_RES_BIT_DEPTH);  // also here, 12 bit would mean 0 - 4096 value range in analog read
-
+    analogReadAveraging(8);
     // initialize keys
     init_key_notes();
     // initialize mux objects
