@@ -49,7 +49,7 @@ void Mux::setMultiplexerChannel(int ch_no, Adafruit_MCP23017 &MCP_DIO)
     bool pin_HiLo;
     for (auto pin_idx : muxAddrPins) {
         pin_HiLo = static_cast<bool>(bit_calc % 2);
-        bit_calc = bit_calc / 2;
+        bit_calc /= 2;
         MCP_DIO.digitalWrite(pin_idx, pin_HiLo);
     }
 }

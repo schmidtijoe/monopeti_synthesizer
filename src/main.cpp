@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Wire.h>
 #include <Adafruit_MCP23017.h>
 #include "wiring.h"
 // include audio system design tool code
@@ -15,6 +16,9 @@ elapsedMicros DEBUG_TIMER_MUX;
 elapsedMillis DEBUG_TIMER_KEYS;
 
 // keybed
+byte keysOutputReg = 0;
+byte keysInputReg = 0;
+constexpr u_int8_t MCP_KEYS_ADDR = 0x20;
 Adafruit_MCP23017 MCP_KEYS;     // gpio expander handling keyboard
 constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle switches
 
@@ -208,19 +212,39 @@ void init_key_notes() {
 
 // read keybed repetitively in loop, make sure this is fast! just updates the struct with key states and timers
 void keybed_read() {
-    for (int out_idx = 8; out_idx < 16; out_idx++) {
-        // set mcp pin high
-        MCP_KEYS.digitalWrite(out_idx, HIGH);
+    u_int8_t outPinNumber = 1;
+    u_int8_t keyInput = 0;
+    DEBUG_TIMER_KEYS = 0;
+    for (int out_idx = 0; out_idx < 8; out_idx++) {
 
+        // set mcp pin high
+        Wire.beginTransmission(MCP_KEYS_ADDR);
+        Wire.write(0x13); // GPIOB
+        Wire.write(outPinNumber); // port B
+        Wire.endTransmission();
         // run through read
+        // read the inputs of bank A
+        Wire.beginTransmission(MCP_KEYS_ADDR);
+        Wire.write(0x12);  // bank A
+        Wire.endTransmission();
+        Wire.requestFrom(MCP_KEYS_ADDR, 1);
+        keyInput=Wire.read();
+
         for (int in_idx = 0; in_idx < 8; in_idx++) {
-            auto total_idx = (out_idx - 8) * 8 + in_idx;
-            auto key_state = static_cast<bool>(MCP_KEYS.digitalRead(in_idx));
+            auto total_idx = out_idx * 8 + in_idx;
+            auto key_state = static_cast<bool>(keyInput % 2);
             notes[total_idx].setPush(key_state);
+            keyInput /= 2;
         }
 
         // reset pin
-        MCP_KEYS.digitalWrite(out_idx, LOW);
+        Wire.beginTransmission(MCP_KEYS_ADDR);
+        Wire.write(0x13); // GPIOB
+        Wire.write(0); // set 0
+        Wire.endTransmission();
+        outPinNumber = outPinNumber << 1;
+        Serial.print("Keybed part timing [ms]: ");
+        Serial.println(DEBUG_TIMER_KEYS);
 
     }
 }
@@ -652,6 +676,10 @@ void switchDioControlChange(const unsigned int * timingInterval, const unsigned 
 void setup()
 {
     // setup hardware
+
+    Wire.begin();
+    Wire.setClock(1000000);
+
     Serial.begin(9600);
     AudioMemory(100);
     sgtl5000_1.enable();
@@ -672,14 +700,26 @@ void setup()
     init_mux();
 
     // initialize mcps
-    MCP_KEYS.begin();
-    for (int out_idx = 8; out_idx <= 15; out_idx++) {
-        MCP_KEYS.pinMode(out_idx, OUTPUT);
-        MCP_KEYS.digitalWrite(out_idx, LOW);
-    }
-    for (int in_idx = 0; in_idx <= 7; in_idx++) {
-        MCP_KEYS.pinMode(in_idx, INPUT);
-    }
+    // keys
+    Wire.beginTransmission(MCP_KEYS_ADDR);
+    Wire.write(0x01); // IODIR B register
+    Wire.write(0x00); // set all of bank B to outputs
+    Wire.endTransmission();
+    // set all port b gpio to low
+    Wire.beginTransmission(MCP_KEYS_ADDR);
+    Wire.write(0x13); // GPIOB
+    Wire.write(0); // port B
+    Wire.endTransmission();
+    // all other default to input (ie. a register)
+
+//    MCP_KEYS.begin(&Wire);
+//    for (int out_idx = 8; out_idx <= 15; out_idx++) {
+//        MCP_KEYS.pinMode(out_idx, OUTPUT);
+//        MCP_KEYS.digitalWrite(out_idx, LOW);
+//    }
+//    for (int in_idx = 0; in_idx <= 7; in_idx++) {
+//        MCP_KEYS.pinMode(in_idx, INPUT);
+//    }
 
     MCP_DIO.begin(1);
     for (int mux_idx = 3; mux_idx < 11; mux_idx++) {
@@ -702,8 +742,10 @@ void setup()
 }
 
 void loop()
-{   DEBUG_TIMER_KEYS = 0;
+{
     keybed_read();
+//    Serial.print("Keybed loop timing [ms]: ");
+//    Serial.println(DEBUG_TIMER_KEYS);
     note_update();
     mux_update(&UPDATE_INTERVAL);       // runs with update rate
     switchDioControlChange(&UPDATE_INTERVAL_2, 670);
