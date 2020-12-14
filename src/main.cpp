@@ -180,14 +180,14 @@ void init_mcps() {
     // set A register
     Wire.beginTransmission(MCP_DIO_ADDR);
     Wire.write(0x00); // IODIR A register
-    // last 5 are output for led control, first 3 are input from sub switches -> 11100000 = 0xe0
-    Wire.write(0xe0); // set B output pins
+    // first 5 are output for led control, last 3 are input from sub switches -> 00000111 = 0x03
+    Wire.write(0x03); // set B output pins
     Wire.endTransmission();
 
     Wire.beginTransmission(MCP_DIO_ADDR);
     Wire.write(0x0c); // pull up register A
-    // pull up first 3 pins -> 11100000 -> 0xe0
-    Wire.write(0xe0);
+    // pull up first 3 pins -> 00000111 -> 0x03
+    Wire.write(0x03);
     Wire.endTransmission();
 
     // set oct toggle high:
@@ -258,7 +258,6 @@ void init_key_notes() {
 void keybed_read() {
     u_int8_t outPinNumber = 1;
     u_int8_t keyInput = 0;
-    DEBUG_TIMER_KEYS = 0;
     for (int out_idx = 0; out_idx < 8; out_idx++) {
 
         // set mcp pin high
@@ -287,8 +286,6 @@ void keybed_read() {
         Wire.write(0); // set 0
         Wire.endTransmission();
         outPinNumber = outPinNumber << 1;
-        Serial.print("Keybed part timing [ms]: ");
-        Serial.println(DEBUG_TIMER_KEYS);
 
     }
 }
@@ -643,7 +640,7 @@ void muxReadUpdate(const bool setRead) {
 void setOctToggleLed(int toggleValue) {
     // have to reset register A MCP DIO output depending on the toggle value
     // 0 value is: want 00100000 written to register -> 0x40
-    int stateToWrite = 0x40;
+    int stateToWrite = 0x20;
     while (toggleValue>0) {
         stateToWrite = stateToWrite << 1;
         toggleValue--;
@@ -675,7 +672,7 @@ int octave_update() {
             setOctToggleLed(octControlToggle);
         }
     }
-    return - (octControlToggle - 5);  // changes oct switch ranging from -2 to 2
+    return octControlToggle;  // changes oct switch ranging from -2 to 2
 }
 
 void switchDioControlChange(const unsigned int * timingInterval, const unsigned int timingSync) {
@@ -728,8 +725,8 @@ void switchDioControlChange(const unsigned int * timingInterval, const unsigned 
 void setup()
 {
     // setup hardware
-    Wire.begin(I2C_MASTER, MCP_KEYS_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000);
-    Wire.begin(I2C_MASTER, MCP_DIO_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 100000);
+    Wire.begin(I2C_MASTER, MCP_KEYS_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000, I2C_OP_MODE_DMA);
+    Wire.begin(I2C_MASTER, MCP_DIO_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000, I2C_OP_MODE_DMA);
 
     init_mcps();
 
@@ -770,10 +767,9 @@ void loop()
 {
     // set up mux channel
     muxReadUpdate(false);
+    // keybed read
     keybed_read();
-//    Serial.print("Keybed loop timing [ms]: ");
-//    Serial.println(DEBUG_TIMER_KEYS);
     note_update();
-    //muxReadUpdate(true);       // runs with update rate
-    //switchDioControlChange(&UPDATE_INTERVAL_2, 670);
+    muxReadUpdate(true);       // runs with update rate
+    switchDioControlChange(&UPDATE_INTERVAL_2, 670);
 }

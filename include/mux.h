@@ -1,5 +1,5 @@
 #pragma once
-#include <i2c_t3.h>
+#include "../test/i2c_t3.h"
 
 class Mux {
 public:

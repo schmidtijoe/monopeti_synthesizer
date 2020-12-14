@@ -1,6 +1,6 @@
 #include "mux.h"
 #include "Arduino.h"
-#include <i2c_t3.h>
+#include "../test/i2c_t3.h"
 
 Mux::Mux()
     : muxAddrPins{8, 9, 10}, chx_values(), analog_out_pin(), state_change()
