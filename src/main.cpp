@@ -1,7 +1,5 @@
 #include <Arduino.h>
-#include <Wire.h>
-#include <Adafruit_MCP23017.h>
-#include "wiring.h"
+#include <i2c_t3.h>
 // include audio system design tool code
 #include "audio_system.h"
 #include "note.h"
@@ -19,7 +17,7 @@ elapsedMillis DEBUG_TIMER_KEYS;
 byte keysOutputReg = 0;
 byte keysInputReg = 0;
 constexpr u_int8_t MCP_KEYS_ADDR = 0x20;
-Adafruit_MCP23017 MCP_KEYS;     // gpio expander handling keyboard
+constexpr u_int8_t MCP_DIO_ADDR = 0x21;
 constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle switches
 
 // analog reading
@@ -48,15 +46,12 @@ const int pinTempoRight = 29;
 Bounce pinTempoTap = Bounce(30, 10);
 const int pinEnvLeft = 3;
 const int pinEnvRight = 4;
-int octControlToggle = 5;
+int octControlToggle = 0;
 bool toggleLedSync = false;
 
 // note & midi interfacing
 constexpr byte HALF_VEL = 90;
 bool TOGGLE_LOOP = false;       // toggles note searching for mono-keyboard use
-
-// digital outputs
-Adafruit_MCP23017 MCP_DIO;      // gpio expander, handling multiplexer switches and LED controls
 
 // controls
 // osc
@@ -165,6 +160,55 @@ void note_to_serial(const Note &name_note) {
         default:
             break;
     }
+}
+
+// initialize MCPs over i2c
+void init_mcps() {
+    // -- KEYS --
+    Wire.beginTransmission(MCP_KEYS_ADDR);
+    Wire.write(0x01); // IODIR B register
+    Wire.write(0x00); // set all of bank B to outputs
+    Wire.endTransmission();
+    // set all port b gpio to low
+    Wire.beginTransmission(MCP_KEYS_ADDR);
+    Wire.write(0x13); // GPIOB
+    Wire.write(0); // port B
+    Wire.endTransmission();
+    // all other default to input (ie. A register)
+
+    // -- DIO --
+    // set A register
+    Wire.beginTransmission(MCP_DIO_ADDR);
+    Wire.write(0x00); // IODIR A register
+    // last 5 are output for led control, first 3 are input from sub switches -> 11100000 = 0xe0
+    Wire.write(0xe0); // set B output pins
+    Wire.endTransmission();
+
+    Wire.beginTransmission(MCP_DIO_ADDR);
+    Wire.write(0x0c); // pull up register A
+    // pull up first 3 pins -> 11100000 -> 0xe0
+    Wire.write(0xe0);
+    Wire.endTransmission();
+
+    // set oct toggle high:
+    Wire.beginTransmission(MCP_DIO_ADDR);
+    Wire.write(0x12); // gpio register A
+    // set 5th pin high other low -> 00100000 = 0x20
+    Wire.write(0x20);
+    Wire.endTransmission();
+
+    // set B register
+    Wire.beginTransmission(MCP_DIO_ADDR);
+    Wire.write(0x01); //IODIR B Register
+    // first 3 are output pins for mux addressing, last pin is input from sub switch -> 10000000 = 0x80
+    Wire.write(0x80);
+    Wire.endTransmission();
+
+    Wire.beginTransmission(MCP_DIO_ADDR);
+    Wire.write(0x0d); // pull up register B
+    // pull up last pin -> 10000000 -> 0x80
+    Wire.write(0x80);
+    Wire.endTransmission();
 }
 
 // initialize note struct -> give correct note numbers and velocities to elements
@@ -562,36 +606,26 @@ void muxControlChange(int mux_no, int ch_no, int value) {
 
 }
 
-void mux_update(const unsigned int * timingInterval) {
+void muxReadUpdate(const bool setRead) {
 
     Mux* mpxcc;
-    if (UPDATE_TIMER >= *timingInterval) {
-        UPDATE_TIMER = 0;
+    if (!setRead) {
+        Mux::setMultiplexerChannel(MUX_READ_INDEX);
+    }
+    else {
+        DEBUG_TIMER_MUX = 0;
+        for (int idx = 0; idx < NO_OF_MODULES; idx++) {
+            mpxcc = &multiplexer_modules[idx];
+            // setup read of mux object
+            mpxcc->read(MUX_READ_INDEX);
+            // to do: implement filter for read!!
 
-        // set up loop
-        if (!TOGGLE_MUX_SET_READ) {
-            // setup address of mux object
-            multiplexer_modules[0].setAddrRead(false, MUX_READ_INDEX, MCP_DIO);
-        }
-//
-//        // reading loop
-        else {
-            DEBUG_TIMER_MUX = 0;
-            for (int idx=0; idx<NO_OF_MODULES; idx++) {
-                mpxcc = &multiplexer_modules[idx];
-                // setup read of mux object
-                mpxcc->setAddrRead(true, MUX_READ_INDEX, MCP_DIO);
-                // to do: implement filter for read!!
-
-                // only trigger control changes when they occur
-                if (mpxcc->hasChanged()) {
-                    muxControlChange(idx, MUX_READ_INDEX, mpxcc->getChValue(MUX_READ_INDEX));
-                }
+            // only trigger control changes when they occur
+            if (mpxcc->hasChanged()) {
+                muxControlChange(idx, MUX_READ_INDEX, mpxcc->getChValue(MUX_READ_INDEX));
             }
-            MUX_READ_INDEX++;
         }
-        TOGGLE_MUX_SET_READ = !TOGGLE_MUX_SET_READ;     // switch between setup and read
-
+        MUX_READ_INDEX++;
         // reset index
         if (MUX_READ_INDEX >= 8) MUX_READ_INDEX = 0;
     }
@@ -606,21 +640,39 @@ void mux_update(const unsigned int * timingInterval) {
  * tap tempo -> p# 30
  * Envelope switch -> p# 3,4
  */
+void setOctToggleLed(int toggleValue) {
+    // have to reset register A MCP DIO output depending on the toggle value
+    // 0 value is: want 00100000 written to register -> 0x40
+    int stateToWrite = 0x40;
+    while (toggleValue>0) {
+        stateToWrite = stateToWrite << 1;
+        toggleValue--;
+    }
+    while (toggleValue<0) {
+        stateToWrite = stateToWrite >> 1;
+        toggleValue++;
+    }
+    Wire.beginTransmission(MCP_DIO_ADDR);
+    Wire.write(0x12);
+    Wire.write(stateToWrite);
+    Wire.endTransmission();
+}
+
 int octave_update() {
     pinOctLeft.update();
     pinOctRight.update();
     if (pinOctRight.fallingEdge()){
-        if (octControlToggle < 7) {
-            MCP_DIO.digitalWrite(octControlToggle, LOW);
+        if (octControlToggle < 2) {
+            // raise octave by one
             octControlToggle++;
-            MCP_DIO.digitalWrite(octControlToggle, HIGH);
+            setOctToggleLed(octControlToggle);
         }
     }
     if (pinOctLeft.fallingEdge()) {
-        if (octControlToggle > 3) {
-            MCP_DIO.digitalWrite(octControlToggle, LOW);
+        if (octControlToggle > -2) {
+            // lower octave by 1
             octControlToggle--;
-            MCP_DIO.digitalWrite(octControlToggle, HIGH);
+            setOctToggleLed(octControlToggle);
         }
     }
     return - (octControlToggle - 5);  // changes oct switch ranging from -2 to 2
@@ -676,9 +728,10 @@ void switchDioControlChange(const unsigned int * timingInterval, const unsigned 
 void setup()
 {
     // setup hardware
+    Wire.begin(I2C_MASTER, MCP_KEYS_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000);
+    Wire.begin(I2C_MASTER, MCP_DIO_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 100000);
 
-    Wire.begin();
-    Wire.setClock(1000000);
+    init_mcps();
 
     Serial.begin(9600);
     AudioMemory(100);
@@ -699,34 +752,6 @@ void setup()
     // initialize mux objects
     init_mux();
 
-    // initialize mcps
-    // keys
-    Wire.beginTransmission(MCP_KEYS_ADDR);
-    Wire.write(0x01); // IODIR B register
-    Wire.write(0x00); // set all of bank B to outputs
-    Wire.endTransmission();
-    // set all port b gpio to low
-    Wire.beginTransmission(MCP_KEYS_ADDR);
-    Wire.write(0x13); // GPIOB
-    Wire.write(0); // port B
-    Wire.endTransmission();
-    // all other default to input (ie. a register)
-
-//    MCP_KEYS.begin(&Wire);
-//    for (int out_idx = 8; out_idx <= 15; out_idx++) {
-//        MCP_KEYS.pinMode(out_idx, OUTPUT);
-//        MCP_KEYS.digitalWrite(out_idx, LOW);
-//    }
-//    for (int in_idx = 0; in_idx <= 7; in_idx++) {
-//        MCP_KEYS.pinMode(in_idx, INPUT);
-//    }
-
-    MCP_DIO.begin(1);
-    for (int mux_idx = 3; mux_idx < 11; mux_idx++) {
-        MCP_DIO.pinMode(mux_idx, OUTPUT);
-        MCP_DIO.digitalWrite(mux_idx, LOW);
-    }
-    MCP_DIO.digitalWrite(octControlToggle, HIGH);
 
     // initialize Digital IO pins
     pinMode(26, INPUT_PULLUP);
@@ -743,10 +768,12 @@ void setup()
 
 void loop()
 {
+    // set up mux channel
+    muxReadUpdate(false);
     keybed_read();
 //    Serial.print("Keybed loop timing [ms]: ");
 //    Serial.println(DEBUG_TIMER_KEYS);
     note_update();
-    mux_update(&UPDATE_INTERVAL);       // runs with update rate
-    switchDioControlChange(&UPDATE_INTERVAL_2, 670);
+    //muxReadUpdate(true);       // runs with update rate
+    //switchDioControlChange(&UPDATE_INTERVAL_2, 670);
 }

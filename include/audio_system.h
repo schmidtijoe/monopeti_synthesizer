@@ -7,16 +7,11 @@
 
 
 #include <Audio.h>
-#include <Wire.h>
+#include <i2c_t3.h>
 #include <SPI.h>
 #include <SD.h>
 #include <SerialFlash.h>
 
-#include <Audio.h>
-#include <Wire.h>
-#include <SPI.h>
-#include <SD.h>
-#include <SerialFlash.h>
 
 // GUItool: begin automatically generated code
 AudioSynthWaveform       LFO1;      //xy=55,76.00000381469727

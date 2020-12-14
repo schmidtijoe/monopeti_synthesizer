@@ -1,6 +1,6 @@
 #include "mux.h"
 #include "Arduino.h"
-#include <Adafruit_MCP23017.h>
+#include <i2c_t3.h>
 
 Mux::Mux()
     : muxAddrPins{8, 9, 10}, chx_values(), analog_out_pin(), state_change()
@@ -11,18 +11,6 @@ void Mux::setAnalogOut(int a_pin)
 {
     // set the output pin of the object
     analog_out_pin = a_pin;
-}
-
-void Mux::setAddrRead(bool toggle_read, int ch_no, Adafruit_MCP23017 &MCP_DIO)
-{
-    if (toggle_read) {
-        // read values
-        read(ch_no);
-    }
-    else {
-        // set addr pins
-        setMultiplexerChannel(ch_no, MCP_DIO);
-    }
 }
 
 int Mux::getChValue(int ch_no) const
@@ -42,16 +30,13 @@ void Mux::setAddressPins(int p1, int p2, int p3)
     muxAddrPins[2] = p3;
 }
 
-void Mux::setMultiplexerChannel(int ch_no, Adafruit_MCP23017 &MCP_DIO)
+void Mux::setMultiplexerChannel(int ch_no)
 {
-    // calculate 3 bit number from channel number to set addr pins high or low and address mux channel
-    auto bit_calc = ch_no;
-    bool pin_HiLo;
-    for (auto pin_idx : muxAddrPins) {
-        pin_HiLo = static_cast<bool>(bit_calc % 2);
-        bit_calc /= 2;
-        MCP_DIO.digitalWrite(pin_idx, pin_HiLo);
-    }
+    // were on reg B of mux MCP DIO and can set the bit straight away per channel number
+    Wire.beginTransmission(0x21);
+    Wire.write(0x13); //gpio register B
+    Wire.write(ch_no);
+    Wire.endTransmission();
 }
 
 void Mux::read(int ch_no)
