@@ -40,6 +40,7 @@ AudioAmplifier           filter_attenuator;           //xy=704.0000114440918,296
 AudioOutputI2S           i2s2;           //xy=749.7500133514404,33.416707038879395
 AudioEffectFreeverbStereo freeverbs;     //xy=772.5555686950684,516.000020980835
 AudioEffectEnvelope      ADSR_vol;      //xy=826.0000114440918,93
+AudioEffectEnvelope      env_off;
 AudioFilterStateVariable LPF;        //xy=866.0000133514404,306.0000057220459
 AudioConnection          patchCord1(LFO1, env_pitch);
 AudioConnection          patchCord2(Volume, delay_fx);

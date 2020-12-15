@@ -14,8 +14,7 @@ elapsedMicros DEBUG_TIMER_MUX;
 elapsedMillis DEBUG_TIMER_KEYS;
 
 // keybed
-byte keysOutputReg = 0;
-byte keysInputReg = 0;
+const int keyOutPins[8] = {25, 26, 27, 28, 29, 30, 3, 4};  // keyboard out pins on digital io rail
 constexpr u_int8_t MCP_KEYS_ADDR = 0x20;
 constexpr u_int8_t MCP_DIO_ADDR = 0x21;
 constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle switches
@@ -37,7 +36,11 @@ int MUX_READ_INDEX = 0;
 elapsedMillis UPDATE_TIMER_2;  // no need to do this every loop
 unsigned int UPDATE_INTERVAL_2 = 5;  // [ms]
 elapsedMillis SYNC_TIMER;
-// pins
+// pins -> have to switch to MCP keys IO capacity here
+u_int8_t dioRead = 0;
+u_int8_t dioState[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+u_int8_t dioComp[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+
 const int pinLedSync = 25;
 Bounce pinOctRight = Bounce(26, 10);
 Bounce pinOctLeft = Bounce(27, 10);
@@ -65,7 +68,7 @@ int subOsc3 = 0;
 const int fadeTime = 15;        // fade timer upon velocity changes = shortest envelope ramp
 
 // envelopes
-AudioEffectEnvelope* ccEnvelope;     // pointer?
+AudioEffectEnvelope* ccEnvelope;     // pointer
 
 // create array of notes and current note
 Note notes[NO_OF_KEYS];
@@ -165,14 +168,17 @@ void note_to_serial(const Note &name_note) {
 // initialize MCPs over i2c
 void init_mcps() {
     // -- KEYS --
+    // B register
     Wire.beginTransmission(MCP_KEYS_ADDR);
-    Wire.write(0x01); // IODIR B register
-    Wire.write(0x00); // set all of bank B to outputs
+    Wire.write(0x01);
+    // pin assignment -> input oct toggle 12, input env switch 34, input tempo switch 56, output tempo led 7, input tempo tap 8
+    // ie: 10111111
+    Wire.write(0xbf);
     Wire.endTransmission();
-    // set all port b gpio to low
+    // need pull up
     Wire.beginTransmission(MCP_KEYS_ADDR);
-    Wire.write(0x13); // GPIOB
-    Wire.write(0); // port B
+    Wire.write(0x0d);
+    Wire.write(0xbf);
     Wire.endTransmission();
     // all other default to input (ie. A register)
 
@@ -256,15 +262,10 @@ void init_key_notes() {
 
 // read keybed repetitively in loop, make sure this is fast! just updates the struct with key states and timers
 void keybed_read() {
-    u_int8_t outPinNumber = 1;
     u_int8_t keyInput = 0;
     for (int out_idx = 0; out_idx < 8; out_idx++) {
-
-        // set mcp pin high
-        Wire.beginTransmission(MCP_KEYS_ADDR);
-        Wire.write(0x13); // GPIOB
-        Wire.write(outPinNumber); // port B
-        Wire.endTransmission();
+        // set matrix out pin high
+        digitalWrite(keyOutPins[out_idx], HIGH);
         // run through read
         // read the inputs of bank A
         Wire.beginTransmission(MCP_KEYS_ADDR);
@@ -279,14 +280,8 @@ void keybed_read() {
             notes[total_idx].setPush(key_state);
             keyInput /= 2;
         }
-
         // reset pin
-        Wire.beginTransmission(MCP_KEYS_ADDR);
-        Wire.write(0x13); // GPIOB
-        Wire.write(0); // set 0
-        Wire.endTransmission();
-        outPinNumber = outPinNumber << 1;
-
+        digitalWrite(keyOutPins[out_idx], LOW);
     }
 }
 
@@ -610,7 +605,6 @@ void muxReadUpdate(const bool setRead) {
         Mux::setMultiplexerChannel(MUX_READ_INDEX);
     }
     else {
-        DEBUG_TIMER_MUX = 0;
         for (int idx = 0; idx < NO_OF_MODULES; idx++) {
             mpxcc = &multiplexer_modules[idx];
             // setup read of mux object
@@ -655,66 +649,98 @@ void setOctToggleLed(int toggleValue) {
     Wire.endTransmission();
 }
 
-int octave_update() {
-    pinOctLeft.update();
-    pinOctRight.update();
-    if (pinOctRight.fallingEdge()){
-        if (octControlToggle < 2) {
-            // raise octave by one
-            octControlToggle++;
-            setOctToggleLed(octControlToggle);
-        }
-    }
-    if (pinOctLeft.fallingEdge()) {
-        if (octControlToggle > -2) {
-            // lower octave by 1
-            octControlToggle--;
-            setOctToggleLed(octControlToggle);
-        }
-    }
-    return octControlToggle;  // changes oct switch ranging from -2 to 2
-}
-
 void switchDioControlChange(const unsigned int * timingInterval, const unsigned int timingSync) {
     if (UPDATE_TIMER_2 >= *timingInterval) {
-        // check octave switch
-        octave = octave_update();
+        // read pins
+        Wire.beginTransmission(MCP_KEYS_ADDR);
+        Wire.write(0x13); // bank B
+        Wire.endTransmission();
+        Wire.requestFrom(MCP_KEYS_ADDR, 1); // request 1 byte
+        dioRead = Wire.read();
+
+        for (int dioIdx=0; dioIdx<8; dioIdx++) {
+            dioComp[dioIdx] = dioRead % 2;
+            dioRead = dioRead >> 1;
+        }
+        // check octave toggle
+        // left
+        if (dioComp[0] != dioState[0]) {
+            // left oct toggle changed
+            if (dioComp[0] == 0) {
+                // switch on
+                if (octave > -2) {
+                    // lower octave by 1
+                    octave--;
+                    setOctToggleLed(octave);
+                }
+            }
+            dioState[0] = dioComp[0];
+        }
+        // right
+        if (dioComp[1] != dioState[1]) {
+            // left oct toggle changed
+            if (dioComp[1] == 0) {
+                // switch on
+                if (octave < 2) {
+                    // raise octave by one
+                    octave++;
+                    setOctToggleLed(octave);
+                }
+            }
+            dioState[1] = dioComp[1];
+        }
 
         // check enevlope switch
-        if (digitalRead(pinEnvLeft) == LOW) {
+        // left
+        if (dioComp[2] == 0 && dioState[2] != dioComp[2]) {
             ccEnvelope = &env_filter;
             setEnvelopeDefault(&env_pitch);
+            setEnvelopeDefault(&env_off);
         }
-        else if (digitalRead(pinEnvRight) ==LOW) {
+
+        //right
+        else if (dioComp[3] == 0 && dioState[3] != dioComp[3]) {
             ccEnvelope = &env_pitch;
             setEnvelopeDefault(&env_filter);
+            setEnvelopeDefault(&env_off);
         }
         else {
-            // ccEnvelope = null?!
+            ccEnvelope = &env_off;
             setEnvelopeDefault(&env_filter);
             setEnvelopeDefault(&env_pitch);
         }
+        dioState[2] = dioComp[2];
+        dioState[3] = dioComp[3];
 
         // check tempo switch
-        if (digitalRead(pinTempoLeft) == LOW) {
+        if (dioComp[4] == 0 && dioComp[4] != dioState[4]) {
             // sync to midi
         }
-        else if (digitalRead(pinTempoRight) ==LOW) {
+        else if (dioComp[5] == 0 && dioComp[5]!= dioState[5]) {
             // sync to knob
         }
         else {
             // sync to tap
         }
+        dioState[4] = dioComp[4];
+        dioState[5] = dioComp[5];
+        dioState[7] = dioComp[7];
     }
     // sync LED switch
     if (SYNC_TIMER >= timingSync) {
         SYNC_TIMER = 0;
-        digitalWrite(pinLedSync, HIGH);
+        Wire.beginTransmission(MCP_KEYS_ADDR);
+        Wire.write(0x13); // bank B
+        Wire.write(0x40); // pin 7 high
+        Wire.endTransmission();
         toggleLedSync = true;
     }
     if (SYNC_TIMER >= 50 && toggleLedSync) {
         // blink light for 50 ms
-        digitalWrite(pinLedSync, LOW);
+        Wire.beginTransmission(MCP_KEYS_ADDR);
+        Wire.write(0x13); // bank B
+        Wire.write(0x00); // pin all low
+        Wire.endTransmission();
         toggleLedSync = false;
     }
 }
@@ -723,7 +749,7 @@ void switchDioControlChange(const unsigned int * timingInterval, const unsigned 
  * program
  */
 void setup()
-{
+{   delay(4000);
     // setup hardware
     Wire.begin(I2C_MASTER, MCP_KEYS_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000, I2C_OP_MODE_DMA);
     Wire.begin(I2C_MASTER, MCP_DIO_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000, I2C_OP_MODE_DMA);
@@ -745,16 +771,13 @@ void setup()
     analogReadAveraging(8);
 
     // initialize keys
+    for (auto pinIdx : keyOutPins){
+        pinMode(pinIdx, OUTPUT);
+        digitalWrite(pinIdx, LOW);
+    }
     init_key_notes();
     // initialize mux objects
     init_mux();
-
-
-    // initialize Digital IO pins
-    pinMode(26, INPUT_PULLUP);
-    pinMode(27, INPUT_PULLUP);
-
-    pinMode(pinLedSync, OUTPUT);
 
     // Initialize OSC
     OSC1.begin(1.0, 0.0, oscWaveForms[oscWaveState[0]]);
@@ -765,11 +788,13 @@ void setup()
 
 void loop()
 {
+    DEBUG_TIMER_KEYS = 0;
     // set up mux channel
     muxReadUpdate(false);
     // keybed read
     keybed_read();
     note_update();
-    muxReadUpdate(true);       // runs with update rate
+    // read mux
+    muxReadUpdate(true);
     switchDioControlChange(&UPDATE_INTERVAL_2, 670);
 }
