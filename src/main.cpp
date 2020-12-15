@@ -65,6 +65,7 @@ int octave = 0;
 int subOsc2 = 0;
 int subOsc3 = 0;
 // volume
+float vol = 0.0;
 const int fadeTime = 15;        // fade timer upon velocity changes = shortest envelope ramp
 
 // envelopes
@@ -745,6 +746,11 @@ void switchDioControlChange(const unsigned int * timingInterval, const unsigned 
     }
 }
 
+void aioControlChange() {
+    // make this timing dependent?
+    vol = static_cast<float>(analogRead(A1)) / static_cast<float>(RES_RANGE);
+    Volume.gain(vol);
+}
 /**
  * program
  */
@@ -797,4 +803,5 @@ void loop()
     // read mux
     muxReadUpdate(true);
     switchDioControlChange(&UPDATE_INTERVAL_2, 670);
+    aioControlChange();
 }
