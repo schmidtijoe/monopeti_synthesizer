@@ -74,7 +74,6 @@ AudioEffectEnvelope* ccEnvelope;     // pointer
 // create array of notes and current note
 Note notes[NO_OF_KEYS];
 static Note CURRENT_NOTE;
-const Note NULL_NOTE;
 
 Mux multiplexer_modules[NO_OF_MODULES];
 
@@ -261,6 +260,35 @@ void init_key_notes() {
     }
 }
 
+// initialize hard coded objects
+void init_sound() {
+    // initialize mixers
+    for (int chIdx = 0; chIdx<4; chIdx++) {
+        mix_osc.gain(chIdx, 0.25);
+    }
+
+    velocity_env.gain(0, static_cast<float>(HALF_VEL) / static_cast<float>(127));
+    velocity_env.gain(1, 1.0);
+    velocity_env.gain(2, 0);
+    velocity_env.gain(3, 0);
+
+    vel_change_high.fadeIn(15);
+
+    Volume.gain(0.5);
+
+    // Initialize OSC
+    OSC1.begin(1.0, 0.0, oscWaveForms[oscWaveState[0]]);
+    OSC2.begin(1.0, 0.0, oscWaveForms[oscWaveState[1]]);
+    OSC3.begin(1.0, 0.0, oscWaveForms[oscWaveState[2]]);
+    pink.amplitude(1);
+
+    // initialize envelopes
+    setEnvelopeDefault(&ADSR_vol);
+    setEnvelopeDefault(&env_pitch);
+    setEnvelopeDefault(&env_filter);
+    setEnvelopeDefault(&env_off);
+}
+
 // read keybed repetitively in loop, make sure this is fast! just updates the struct with key states and timers
 void keybed_read() {
     u_int8_t keyInput = 0;
@@ -292,14 +320,14 @@ void setOsc(const Note & note2set, const int * octave2set, const int * sub1, con
     OSC1.frequency(midi2freq(*octave2set * 12 + note2set.get_note()));
     OSC2.frequency(midi2freq(*octave2set * 12 + *sub1 * 12 + note2set.get_note()));
     OSC3.frequency(midi2freq(*octave2set * 12 + *sub2 * 12 + note2set.get_note()));
-    pink.noteOn(midi2freq(*octave2set * 12 + note2set.get_note()), 0.8);
+    // set velocity
     if (note2set.get_velocity() == 127) {
         vel_change_high.fadeIn(fadeTime);
         vel_change_low.fadeOut(fadeTime);
     }
-    else {
-        vel_change_high.fadeOut(fadeTime);
+    else if (note2set.get_velocity() == HALF_VEL) {
         vel_change_low.fadeIn(fadeTime);
+        vel_change_high.fadeOut(fadeTime);
     }
 }
 
@@ -307,13 +335,12 @@ void playNote(const Note note2play) {
     // set OSCs
     setOsc(note2play, &octave, &subOsc2, &subOsc3);
     // start envelopes
+    ADSR_vol.noteOn();
 }
 
 void stopNote() {
-    // set OSCs zero note?
-    setOsc(NULL_NOTE, &octave, &subOsc2, &subOsc3);
-    pink.noteOff(0.8);
     // stop envelopes
+    ADSR_vol.noteOff();
 }
 
 // identifies note to play
@@ -333,31 +360,16 @@ void note_update() {
     for (const auto &note: notes) {
         if (note.isPressed() && (note.getTime() > CURRENT_NOTE.getTime())) {
             setOsc(note, &octave, &subOsc2, &subOsc3);
-            if (note.get_note() == CURRENT_NOTE.get_note()) {
-                // same note value
-                Serial.println("no new event");
-                // Velocity change
-
-            }
-            else {
-                // send play event
+            if (!(note.get_note() == CURRENT_NOTE.get_note() && CURRENT_NOTE.isPressed())) {
                 playNote(note);
             }
-            note_to_serial(note);
             CURRENT_NOTE = note;
         }
 
         // in case were in search mode, ie toggled loop to find other pressed notes
         if (note.isPressed() && TOGGLE_LOOP) {
             setOsc(note, &octave, &subOsc2, &subOsc3);      // changes pitch and velocity,
-            if (note.get_note() == CURRENT_NOTE.get_note()) {
-                // same note value -> only need a solution if pitch change to same pitch is faulty
-                // Velocity change
-                Serial.println("no new event");
-            }
             CURRENT_NOTE = note;
-            note_to_serial(note);
-            // change pitch & velocity
             // reset toggle
             TOGGLE_LOOP = false;
         }
@@ -368,7 +380,6 @@ void note_update() {
             if (!TOGGLE_LOOP) {
                 // one loop through other notes and nothing changed:
                 CURRENT_NOTE.setPush(false);  // makes sure timer is reset -> solves case for same note going off and on again
-                Serial.println("last off event");
                 // send stop event
                 stopNote();
             }
@@ -412,8 +423,8 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                 case 3:
                     // ADSR - volume, release
                     ADSR_vol.release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
-                    // Serial.print("3 - Value change: ");
-                    // Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
+//                    Serial.print("3 - Value change: ");
+//                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
                 case 4:
                     // ADSR - modulation, attack
@@ -634,7 +645,7 @@ void muxReadUpdate(const bool setRead) {
  */
 void setOctToggleLed(int toggleValue) {
     // have to reset register A MCP DIO output depending on the toggle value
-    // 0 value is: want 00100000 written to register -> 0x40
+    // 0 value is: want 00100000 written to register -> 0x20
     int stateToWrite = 0x20;
     while (toggleValue>0) {
         stateToWrite = stateToWrite << 1;
@@ -669,9 +680,9 @@ void switchDioControlChange(const unsigned int * timingInterval, const unsigned 
             // left oct toggle changed
             if (dioComp[0] == 0) {
                 // switch on
-                if (octave > -2) {
-                    // lower octave by 1
-                    octave--;
+                if (octave < 2) {
+                    // raise octave by one
+                    octave++;
                     setOctToggleLed(octave);
                 }
             }
@@ -682,9 +693,9 @@ void switchDioControlChange(const unsigned int * timingInterval, const unsigned 
             // left oct toggle changed
             if (dioComp[1] == 0) {
                 // switch on
-                if (octave < 2) {
-                    // raise octave by one
-                    octave++;
+                if (octave > -2) {
+                    // lower octave by 1
+                    octave--;
                     setOctToggleLed(octave);
                 }
             }
@@ -751,19 +762,30 @@ void aioControlChange() {
     vol = static_cast<float>(analogRead(A1)) / static_cast<float>(RES_RANGE);
     Volume.gain(vol);
 }
+
+void fancyOctLightsSetup() {
+    int lightsSetList[9] = {0,1,2,1,0,-1,-2,-1,0};
+    for (auto togIdx : lightsSetList) {
+        setOctToggleLed(togIdx);
+        delay(300);
+    }
+}
 /**
  * program
  */
 void setup()
-{   delay(4000);
+{
     // setup hardware
+    Serial.println("___SETUP HARDWARE___");
     Wire.begin(I2C_MASTER, MCP_KEYS_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000, I2C_OP_MODE_DMA);
     Wire.begin(I2C_MASTER, MCP_DIO_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000, I2C_OP_MODE_DMA);
 
+    Serial.println("___INIT MCPs___");
     init_mcps();
 
+    Serial.println("___ALLOCATE___");
     Serial.begin(9600);
-    AudioMemory(100);
+    AudioMemory(200);
     sgtl5000_1.enable();
     sgtl5000_1.volume(0.5);
 
@@ -776,25 +798,31 @@ void setup()
     analogReadResolution(READ_RES_BIT_DEPTH);  // also here, 12 bit would mean 0 - 4096 value range in analog read
     analogReadAveraging(8);
 
+    Serial.println("___INIT KEYS___");
     // initialize keys
     for (auto pinIdx : keyOutPins){
         pinMode(pinIdx, OUTPUT);
         digitalWrite(pinIdx, LOW);
     }
+    Serial.println("___INIT KEYNOTES___");
+
     init_key_notes();
     // initialize mux objects
+    Serial.println("___INIT MUX___");
     init_mux();
+    // initialize sound objects
+    Serial.println("___INIT SOUND___");
+    init_sound();
 
-    // Initialize OSC
-    OSC1.begin(1.0, 0.0, oscWaveForms[oscWaveState[0]]);
-    OSC2.begin(1.0, 0.0, oscWaveForms[oscWaveState[1]]);
-    OSC3.begin(1.0, 0.0, oscWaveForms[oscWaveState[2]]);
-    pink.noteOn(0, 0.8);
+    // some light switching fancy upon start
+    fancyOctLightsSetup();
+    Serial.println("___DONE___");
+
 }
 
 void loop()
 {
-    DEBUG_TIMER_KEYS = 0;
+    // DEBUG_TIMER_KEYS = 0;
     // set up mux channel
     muxReadUpdate(false);
     // keybed read
