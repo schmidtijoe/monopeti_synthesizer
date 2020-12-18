@@ -4,6 +4,7 @@
 #include "audio_system.h"
 #include "note.h"
 #include "mux.h"
+#include <MIDI.h>
 
 /**
  * Global variables
@@ -11,6 +12,9 @@
 // DEBUG
 // elapsedMicros DEBUG_TIMER_MUX;
 
+// MIDI IO
+MIDI_CREATE_INSTANCE(HardwareSerial, Serial1, MIDI);
+int MIDI_CHANNEL = 1;
 
 // keybed
 const int keyOutPins[8] = {25, 26, 27, 28, 29, 30, 3, 4};  // keyboard out pins on digital io rail
@@ -359,9 +363,7 @@ void init_sound() {
     freeverbs.damping(0);
 }
 
-
-/**
- * Multiplexer, setting, reading
+/** Multiplexer, setting, reading
  */
 void init_mux() {
     for (int idx=0; idx<NO_OF_MODULES; idx++) {
@@ -823,6 +825,43 @@ void keybed_read() {
     }
 }
 
+/** MIDI IO
+ */
+void midiPushNote(__unused byte midiChannel, byte midiNote, byte midiVelocity) {
+    if (midiVelocity > 0 && midiVelocity < 91) {
+        for (auto &note: notes) {
+            if (note.get_note() == midiNote && note.get_velocity() == 90) {
+                // map all incoming midi notes with velocity between 1 and 91 to our velocity 90 notes
+                note.setPush(true);
+            }
+        }
+    }
+    else if (midiVelocity > 90) {
+        for (auto &note: notes) {
+            if (note.get_note() == midiNote && note.get_velocity() == 127) {
+                // map all incoming midi notes with velocity between bigger 90 to our 127 velocity notes
+                note.setPush(true);
+            }
+        }
+    }
+    else {
+        // velocity 0 means midi sends note off
+        for (auto &note: notes) {
+            if (note.get_note() == midiNote) {
+                // set all notes (90 and 127 off)
+                note.setPush(false);
+            }
+        }
+    }
+    // rest should be handled by our note_update function deciding which to play
+}
+
+void init_midi() {
+    MIDI.begin(MIDI_CHANNEL);
+    MIDI.setHandleNoteOn(midiPushNote);
+    MIDI.setHandleNoteOff(midiPushNote);
+}
+
 void fancyOctLightsSetup() {
     int lightsSetList[9] = {0,1,2,1,0,-1,-2,-1,0};
     for (auto togIdx : lightsSetList) {
@@ -830,6 +869,7 @@ void fancyOctLightsSetup() {
         delay(200);
     }
 }
+
 /**
  * program
  */
@@ -840,6 +880,7 @@ void setup()
     Serial.println("___SETUP HARDWARE___");
     Wire.begin(I2C_MASTER, MCP_KEYS_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000);
     Wire.begin(I2C_MASTER, MCP_DIO_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000);
+    init_midi();
 
     Serial.println("___INIT MCPs___");
     init_MCPs();
@@ -884,6 +925,9 @@ void loop()
 {
     // keybed read - including mux
     keybed_read();
+    // midi read, pushes the same note objects on off
+    MIDI.read();
+    // handle note objects
     note_update();
 
     switchDioControlChange(&UPDATE_INTERVAL_2, 670);
