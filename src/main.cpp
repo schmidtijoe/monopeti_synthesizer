@@ -12,6 +12,7 @@
  // DEBUG
 elapsedMicros DEBUG_TIMER_MUX;
 elapsedMillis DEBUG_TIMER_KEYS;
+elapsedMillis LFO_VCA_TIMER;
 
 // keybed
 const int keyOutPins[8] = {25, 26, 27, 28, 29, 30, 3, 4};  // keyboard out pins on digital io rail
@@ -29,8 +30,6 @@ unsigned int UPDATE_INTERVAL = 100;       // [us] reading interval for analog in
 
 constexpr u_int8_t NO_OF_MODULES = 4;
 int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 32};
-bool TOGGLE_MUX_SET_READ = false;       // toggle between setting and reading mux
-int MUX_READ_INDEX = 0;
 
 // digital IO
 elapsedMillis UPDATE_TIMER_2;  // no need to do this every loop
@@ -41,15 +40,6 @@ u_int8_t dioRead = 0;
 u_int8_t dioState[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 u_int8_t dioComp[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
-const int pinLedSync = 25;
-Bounce pinOctRight = Bounce(26, 10);
-Bounce pinOctLeft = Bounce(27, 10);
-const int pinTempoLeft = 28;
-const int pinTempoRight = 29;
-Bounce pinTempoTap = Bounce(30, 10);
-const int pinEnvLeft = 3;
-const int pinEnvRight = 4;
-int octControlToggle = 0;
 bool toggleLedSync = false;
 
 // note & midi interfacing
@@ -283,109 +273,17 @@ void init_sound() {
     pink.amplitude(1);
 
     // initialize envelopes
+    ccEnvelope = &env_off;
     setEnvelopeDefault(&ADSR_vol);
     setEnvelopeDefault(&env_pitch);
     setEnvelopeDefault(&env_filter);
     setEnvelopeDefault(&env_off);
+
+    // lfo vca
+    lfoVca.begin(1.0, 0.0, WAVEFORM_SINE);
+    lfoVca.offset(1.0);
 }
 
-// read keybed repetitively in loop, make sure this is fast! just updates the struct with key states and timers
-void keybed_read() {
-    u_int8_t keyInput = 0;
-    for (int out_idx = 0; out_idx < 8; out_idx++) {
-        // set matrix out pin high
-        digitalWrite(keyOutPins[out_idx], HIGH);
-        // run through read
-        // read the inputs of bank A
-        Wire.beginTransmission(MCP_KEYS_ADDR);
-        Wire.write(0x12);  // bank A
-        Wire.endTransmission();
-        Wire.requestFrom(MCP_KEYS_ADDR, 1);
-        keyInput=Wire.read();
-
-        for (int in_idx = 0; in_idx < 8; in_idx++) {
-            auto total_idx = out_idx * 8 + in_idx;
-            auto key_state = static_cast<bool>(keyInput % 2);
-            notes[total_idx].setPush(key_state);
-            keyInput /= 2;
-        }
-        // reset pin
-        digitalWrite(keyOutPins[out_idx], LOW);
-    }
-}
-
-// set frequencies, play notes
-void setOsc(const Note & note2set, const int * octave2set, const int * sub1, const int * sub2) {
-    // calculate freq from midi note and set
-    OSC1.frequency(midi2freq(*octave2set * 12 + note2set.get_note()));
-    OSC2.frequency(midi2freq(*octave2set * 12 + *sub1 * 12 + note2set.get_note()));
-    OSC3.frequency(midi2freq(*octave2set * 12 + *sub2 * 12 + note2set.get_note()));
-    // set velocity
-    if (note2set.get_velocity() == 127) {
-        vel_change_high.fadeIn(fadeTime);
-        vel_change_low.fadeOut(fadeTime);
-    }
-    else if (note2set.get_velocity() == HALF_VEL) {
-        vel_change_low.fadeIn(fadeTime);
-        vel_change_high.fadeOut(fadeTime);
-    }
-}
-
-void playNote(const Note note2play) {
-    // set OSCs
-    setOsc(note2play, &octave, &subOsc2, &subOsc3);
-    // start envelopes
-    ADSR_vol.noteOn();
-}
-
-void stopNote() {
-    // stop envelopes
-    ADSR_vol.noteOff();
-}
-
-// identifies note to play
-void note_update() {
-    /**
-     * need function that sends:
-     * - > note on event when no note pressed previously (even if the last note off event is the same note!!!)
-     * - > note off event for all notes if no note is pressed anymore
-     * - > note pitch and velocity change if note goes off but others are still pressed
-     *
-     * what happens if note is on and new note is pressed?          -> new on event  condition A -> note.ispressed true & highest getTime()
-     * what happens if no note is played and new is pressed?        -> new on event   condition A -> note.ispressed true & highest getTime()
-     * what happens if note goes off and other is on?               -> pitch & vel change, no new event (extra condition, extra toggle? one more loop til off?)
-     * what happens if note goes off and no other is on             -> new off event
-     * what happens with velocity changes?                          -> no play events
-     */
-    for (const auto &note: notes) {
-        if (note.isPressed() && (note.getTime() > CURRENT_NOTE.getTime())) {
-            setOsc(note, &octave, &subOsc2, &subOsc3);
-            if (!(note.get_note() == CURRENT_NOTE.get_note() && CURRENT_NOTE.isPressed())) {
-                playNote(note);
-            }
-            CURRENT_NOTE = note;
-        }
-
-        // in case were in search mode, ie toggled loop to find other pressed notes
-        if (note.isPressed() && TOGGLE_LOOP) {
-            setOsc(note, &octave, &subOsc2, &subOsc3);      // changes pitch and velocity,
-            CURRENT_NOTE = note;
-            // reset toggle
-            TOGGLE_LOOP = false;
-        }
-
-        // in case were on current note and it switches to off
-        if ((note.get_note() == CURRENT_NOTE.get_note()) && (note.get_velocity() == CURRENT_NOTE.get_velocity()) && !note.isPressed() && CURRENT_NOTE.isPressed()) {
-            TOGGLE_LOOP = !TOGGLE_LOOP;
-            if (!TOGGLE_LOOP) {
-                // one loop through other notes and nothing changed:
-                CURRENT_NOTE.setPush(false);  // makes sure timer is reset -> solves case for same note going off and on again
-                // send stop event
-                stopNote();
-            }
-        }
-    }
-}
 
 /**
  * Multiplexer, setting, reading
@@ -429,8 +327,8 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                 case 4:
                     // ADSR - modulation, attack
                     ccEnvelope->attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
-                    // Serial.print("4 - Value change: ");
-                    // Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
+//                    Serial.print("4 - Value change: ");
+//                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
                 case 5:
                     // ADSR - modulation, decay
@@ -539,7 +437,8 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                     // Serial.println(ccValue);
                     break;
                 case 2:
-                    // lfo 3 depth
+                    lfoVca.amplitude(static_cast<float>(0.01+ccValue));
+                    // 0 to 1
                     // Serial.print("2 - Value change: ");
                     // Serial.println(ccValue);
                     break;
@@ -560,6 +459,7 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                     break;
                 case 6:
                     // lfo 3 speed
+                    lfoVca.frequency(ccValue * 10);     // 0 to 20 Hz limited by update loop
                     // Serial.print("6 - Value change: ");
                     // Serial.println(ccValue);
                     break;
@@ -610,27 +510,76 @@ void muxControlChange(int mux_no, int ch_no, int value) {
 
 }
 
-void muxReadUpdate(const bool setRead) {
-
-    Mux* mpxcc;
-    if (!setRead) {
-        Mux::setMultiplexerChannel(MUX_READ_INDEX);
+// set frequencies, play notes
+void setOsc(const Note & note2set, const int * octave2set, const int * sub1, const int * sub2) {
+    // calculate freq from midi note and set
+    OSC1.frequency(midi2freq(*octave2set * 12 + note2set.get_note()));
+    OSC2.frequency(midi2freq(*octave2set * 12 + *sub1 * 12 + note2set.get_note()));
+    OSC3.frequency(midi2freq(*octave2set * 12 + *sub2 * 12 + note2set.get_note()));
+    // set velocity
+    if (note2set.get_velocity() == 127) {
+        vel_change_high.fadeIn(fadeTime);
+        vel_change_low.fadeOut(fadeTime);
     }
-    else {
-        for (int idx = 0; idx < NO_OF_MODULES; idx++) {
-            mpxcc = &multiplexer_modules[idx];
-            // setup read of mux object
-            mpxcc->read(MUX_READ_INDEX);
-            // to do: implement filter for read!!
+    else if (note2set.get_velocity() == HALF_VEL) {
+        vel_change_low.fadeIn(fadeTime);
+        vel_change_high.fadeOut(fadeTime);
+    }
+}
 
-            // only trigger control changes when they occur
-            if (mpxcc->hasChanged()) {
-                muxControlChange(idx, MUX_READ_INDEX, mpxcc->getChValue(MUX_READ_INDEX));
+void playNote(const Note note2play) {
+    // set OSCs
+    setOsc(note2play, &octave, &subOsc2, &subOsc3);
+    // start envelopes
+    ADSR_vol.noteOn();
+}
+
+void stopNote() {
+    // stop envelopes
+    ADSR_vol.noteOff();
+}
+
+// identifies note to play
+void note_update() {
+    /**
+     * need function that sends:
+     * - > note on event when no note pressed previously (even if the last note off event is the same note!!!)
+     * - > note off event for all notes if no note is pressed anymore
+     * - > note pitch and velocity change if note goes off but others are still pressed
+     *
+     * what happens if note is on and new note is pressed?          -> new on event  condition A -> note.ispressed true & highest getTime()
+     * what happens if no note is played and new is pressed?        -> new on event   condition A -> note.ispressed true & highest getTime()
+     * what happens if note goes off and other is on?               -> pitch & vel change, no new event (extra condition, extra toggle? one more loop til off?)
+     * what happens if note goes off and no other is on             -> new off event
+     * what happens with velocity changes?                          -> no play events
+     */
+    for (const auto &note: notes) {
+        if (note.isPressed() && (note.getTime() > CURRENT_NOTE.getTime())) {
+            setOsc(note, &octave, &subOsc2, &subOsc3);
+            if (!(note.get_note() == CURRENT_NOTE.get_note() && CURRENT_NOTE.isPressed())) {
+                playNote(note);
+            }
+            CURRENT_NOTE = note;
+        }
+
+        // in case were in search mode, ie toggled loop to find other pressed notes
+        if (note.isPressed() && TOGGLE_LOOP) {
+            setOsc(note, &octave, &subOsc2, &subOsc3);      // changes pitch and velocity,
+            CURRENT_NOTE = note;
+            // reset toggle
+            TOGGLE_LOOP = false;
+        }
+
+        // in case were on current note and it switches to off
+        if ((note.get_note() == CURRENT_NOTE.get_note()) && (note.get_velocity() == CURRENT_NOTE.get_velocity()) && !note.isPressed() && CURRENT_NOTE.isPressed()) {
+            TOGGLE_LOOP = !TOGGLE_LOOP;
+            if (!TOGGLE_LOOP) {
+                // one loop through other notes and nothing changed:
+                CURRENT_NOTE.setPush(false);  // makes sure timer is reset -> solves case for same note going off and on again
+                // send stop event
+                stopNote();
             }
         }
-        MUX_READ_INDEX++;
-        // reset index
-        if (MUX_READ_INDEX >= 8) MUX_READ_INDEX = 0;
     }
 }
 
@@ -761,6 +710,61 @@ void aioControlChange() {
     // make this timing dependent?
     vol = static_cast<float>(analogRead(A1)) / static_cast<float>(RES_RANGE);
     Volume.gain(vol);
+    // amplitude modulation with successive calls (self build LFO ) to volume gain
+}
+
+void muxReadUpdate(const bool setRead, const int setChannel) {
+
+    Mux* mpxcc;
+    if (!setRead) {
+        Mux::setMultiplexerChannel(setChannel);
+    }
+    else {
+        for (int idx = 0; idx < NO_OF_MODULES; idx++) {
+            mpxcc = &multiplexer_modules[idx];
+            // setup read of mux object
+            mpxcc->read(setChannel);
+            // to do: implement filter for read!!
+
+            // only trigger control changes when they occur
+            if (mpxcc->hasChanged()) {
+                muxControlChange(idx, setChannel, mpxcc->getChValue(setChannel));
+            }
+        }
+    }
+}
+
+/** keybed and notes
+ */
+// read keybed repetitively in loop, make sure this is fast! just updates the struct with key states and timers
+void keybed_read() {
+    DEBUG_TIMER_KEYS = 0;
+    u_int8_t keyInput = 0;
+    for (int out_idx = 0; out_idx < 8; out_idx++) {
+        // set matrix out pin high
+        digitalWrite(keyOutPins[out_idx], HIGH);
+        // set mux pins
+        muxReadUpdate(false, out_idx);
+
+        // run through read
+        // read the inputs of bank A
+        Wire.beginTransmission(MCP_KEYS_ADDR);
+        Wire.write(0x12);  // bank A
+        Wire.endTransmission();
+        Wire.requestFrom(MCP_KEYS_ADDR, 1);
+        keyInput=Wire.read();
+
+        for (int in_idx = 0; in_idx < 8; in_idx++) {
+            auto total_idx = out_idx * 8 + in_idx;
+            auto key_state = static_cast<bool>(keyInput % 2);
+            notes[total_idx].setPush(key_state);
+            keyInput /= 2;
+        }
+        // read mux values
+        muxReadUpdate(true, out_idx);
+        // reset pin
+        digitalWrite(keyOutPins[out_idx], LOW);
+    }
 }
 
 void fancyOctLightsSetup() {
@@ -776,15 +780,15 @@ void fancyOctLightsSetup() {
 void setup()
 {
     // setup hardware
+    Serial.begin(9600);
     Serial.println("___SETUP HARDWARE___");
-    Wire.begin(I2C_MASTER, MCP_KEYS_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000, I2C_OP_MODE_DMA);
-    Wire.begin(I2C_MASTER, MCP_DIO_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000, I2C_OP_MODE_DMA);
+    Wire.begin(I2C_MASTER, MCP_KEYS_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000);
+    Wire.begin(I2C_MASTER, MCP_DIO_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000);
 
     Serial.println("___INIT MCPs___");
     init_mcps();
 
     Serial.println("___ALLOCATE___");
-    Serial.begin(9600);
     AudioMemory(200);
     sgtl5000_1.enable();
     sgtl5000_1.volume(0.5);
@@ -822,14 +826,10 @@ void setup()
 
 void loop()
 {
-    // DEBUG_TIMER_KEYS = 0;
-    // set up mux channel
-    muxReadUpdate(false);
-    // keybed read
+    // keybed read - including mux
     keybed_read();
     note_update();
-    // read mux
-    muxReadUpdate(true);
+
     switchDioControlChange(&UPDATE_INTERVAL_2, 670);
     aioControlChange();
 }

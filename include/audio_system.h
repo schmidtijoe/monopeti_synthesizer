@@ -12,13 +12,13 @@
 
 // GUItool: begin automatically generated code
 AudioSynthWaveform       LFO1;      //xy=55,76.00000381469727
+AudioEffectEnvelope      env_pitch;      //xy=170.00000190734863,120
 AudioEffectFade          vel_fade_midi;          //xy=175.0000228881836,343.0000057220459
 AudioEffectFade          vel_change_low;          //xy=179.00001525878906,274.0000047683716
 AudioEffectFade          vel_change_high;          //xy=180.00000762939453,309.00000381469727
-AudioEffectEnvelope      env_pitch;      //xy=182,76
 AudioEffectDelay         delay_fx;         //xy=266.4444389343262,595.5555419921875
 AudioSynthNoisePink      pink;          //xy=324,150.00000190734863
-AudioSynthWaveformModulated OSC1;   //xy=335.00000381469727,26.000003337860107
+AudioSynthWaveformModulated OSC1;   //xy=334.00000381469727,25.000003814697266
 AudioSynthWaveformModulated OSC2;   //xy=337.00000762939453,67.00000667572021
 AudioSynthWaveformModulated OSC3;   //xy=337,110.00001430511475
 AudioSynthWaveform       LFO_ring;      //xy=345.00000762939453,351.0000057220459
@@ -34,8 +34,10 @@ AudioMixer4              mix_delay_wet;         //xy=610.4444274902344,517.46668
 AudioEffectEnvelope      env_filter;      //xy=668.0000114440918,338.0000057220459
 AudioEffectEnvelope      ADSR_vol;      //xy=696.0000114440918,48.00000190734863
 AudioAmplifier           filter_attenuator;           //xy=704.0000114440918,296.00000381469727
+AudioSynthWaveform       lfoVca;      //xy=713.0000076293945,246.00000381469727
+AudioEffectMultiply      vca;      //xy=722.0000095367432,202.00000381469727
+AudioAmplifier           Volume;           //xy=769.0000095367432,141.00001525878906
 AudioEffectFreeverbStereo freeverbs;     //xy=772.5555686950684,516.000020980835
-AudioAmplifier           Volume;           //xy=856.0000076293945,113.00001335144043
 AudioFilterStateVariable LPF;        //xy=866.0000133514404,306.0000057220459
 AudioOutputI2S           i2s2;           //xy=903.7500076293945,28.41670513153076
 AudioConnection          patchCord1(LFO1, env_pitch);
@@ -57,7 +59,7 @@ AudioConnection          patchCord16(dc_ring, 0, mix_ring_wet, 1);
 AudioConnection          patchCord17(mix_delay1, 0, mix_delay_wet, 1);
 AudioConnection          patchCord18(mix_delay2, 0, mix_delay_wet, 2);
 AudioConnection          patchCord19(mix_ring_wet, 0, ring, 1);
-AudioConnection          patchCord20(velocity_env, Volume);
+AudioConnection          patchCord20(velocity_env, 0, vca, 0);
 AudioConnection          patchCord21(ring, filter_attenuator);
 AudioConnection          patchCord22(mix_osc, ADSR_vol);
 AudioConnection          patchCord23(LFO2, env_filter);
@@ -67,8 +69,10 @@ AudioConnection          patchCord26(ADSR_vol, vel_change_low);
 AudioConnection          patchCord27(ADSR_vol, vel_change_high);
 AudioConnection          patchCord28(ADSR_vol, vel_fade_midi);
 AudioConnection          patchCord29(filter_attenuator, 0, LPF, 0);
-AudioConnection          patchCord30(Volume, 0, i2s2, 0);
-AudioConnection          patchCord31(Volume, 0, i2s2, 1);
+AudioConnection          patchCord30(lfoVca, 0, vca, 1);
+AudioConnection          patchCord31(vca, Volume);
+AudioConnection          patchCord32(Volume, 0, i2s2, 0);
+AudioConnection          patchCord33(Volume, 0, i2s2, 1);
 AudioControlSGTL5000     sgtl5000_1;     //xy=885.0000076293945,183.00000762939453
 // GUItool: end automatically generated code
 
