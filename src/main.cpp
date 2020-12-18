@@ -24,6 +24,7 @@ constexpr u_int8_t NO_OF_KEYS = 64;     // total number of keys, i.e. toggle swi
 constexpr u_int8_t READ_RES_BIT_DEPTH = 8;  // bit depth of reading resolution
 int RES_RANGE = (int) pow(2, READ_RES_BIT_DEPTH) - 1;  // analog reading range, dependent on bit depth
 elapsedMicros UPDATE_TIMER;
+const int analogPotPins[5] = {A20, A21, A22, A6, A7};   // ring depth/speed/wet, portamento, mod
 
 // multiplexers
 unsigned int UPDATE_INTERVAL = 100;       // [us] reading interval for analog inputs through multiplexers
@@ -54,12 +55,18 @@ float detune = 0.0;
 int octave = 0;
 int subOsc2 = 0;
 int subOsc3 = 0;
+// modulation
+const int modOctRange = 2;  // number of octaves frequency modulation can maximally shift the wave
+const int modPhRange = 180;  // modulation signal can change the phase that many degrees max
 // volume
 float vol = 0.0;
 const int fadeTime = 15;        // fade timer upon velocity changes = shortest envelope ramp
-
-// envelopes
-AudioEffectEnvelope* ccEnvelope;     // pointer
+// ring
+float ringDepth = 0;
+float ringSpeed = 0;
+float ringWet = 0;
+// delay
+unsigned int delayTaps = 1;
 
 // create array of notes and current note
 Note notes[NO_OF_KEYS];
@@ -83,6 +90,45 @@ void setEnvelopeDefault(AudioEffectEnvelope* envDefault) {
     envDefault->decay(15.0);
     envDefault->sustain(1);
     envDefault->release(15.0);
+}
+
+void setEnvelopeOnOff(const bool onoff, AudioMixer4* envelopeMixer) {
+    if (onoff) {
+        // set mixer turn off direct signal and on enveloped signal
+        envelopeMixer->gain(0, 0);
+        envelopeMixer->gain(1, 1);
+        envelopeMixer->gain(2, 0);
+        envelopeMixer->gain(3, 0);
+
+    }
+    else {
+        //set mixer to bypass envelope
+        envelopeMixer->gain(0, 1);
+        envelopeMixer->gain(1, 0);
+        envelopeMixer->gain(2, 0);
+        envelopeMixer->gain(3, 0);
+
+    }
+
+}
+
+void setModOsc(int mode) {
+    if (mode == 0) {
+        OSC1.frequencyModulation(modOctRange);
+        OSC2.frequencyModulation(modOctRange);
+        OSC3.frequencyModulation(modOctRange);
+    }
+    else {
+        OSC1.phaseModulation(modPhRange);
+        OSC2.phaseModulation(modPhRange);
+        OSC3.phaseModulation(modPhRange);
+    }
+}
+
+void setDelayDecay(unsigned int taps, const float msDecay) {
+    for (unsigned int delIdx=0; delIdx<taps; delIdx++){
+        delay_fx.delay(delIdx, float(1 + delIdx) * msDecay);
+    }
 }
 
 // testing/debugging functions
@@ -273,15 +319,47 @@ void init_sound() {
     pink.amplitude(1);
 
     // initialize envelopes
-    ccEnvelope = &env_off;
     setEnvelopeDefault(&ADSR_vol);
     setEnvelopeDefault(&env_pitch);
     setEnvelopeDefault(&env_filter);
-    setEnvelopeDefault(&env_off);
+    setEnvelopeOnOff(false, &env_filter_onoff);
+    setEnvelopeOnOff(false, &env_pitch_onoff);
 
-    // lfo vca
+    // lfos
+    //vca (3)
     lfoVca.begin(1.0, 0.0, WAVEFORM_SINE);
     lfoVca.offset(1.0);
+    // 1
+    LFO1.begin(1.0, 0.0, WAVEFORM_TRIANGLE);
+    setModOsc(0); // initialize with freq modulation
+    // 2
+    LFO2.begin(1.0, 0.0, WAVEFORM_TRIANGLE);
+
+    // ring modulator
+    setEnvelopeOnOff(false, &mix_ring_wet);
+    dc_ring.amplitude(1);
+    LFO_ring.begin(1.0, 0.0, WAVEFORM_SAWTOOTH);
+
+    // lpf
+    LPF.octaveControl(2);
+    LPF.resonance(0.7);
+    LPF.frequency(10000);
+    filter_attenuator.gain(0.85); // try and error overshooting with resonance without attenuation can cause clipping
+
+    // FX
+    // delay
+    setDelayDecay(2, 20);
+    setEnvelopeOnOff(false, &mix_delay_wet);
+    mix_delay.gain(0,0.7);
+    mix_delay.gain(1, 0.5);
+    mix_delay.gain(2,0.3);
+    mix_delay.gain(3, 0.1);
+
+    // reverb
+    setEnvelopeOnOff(false, &mix_verb_wet_r);
+    setEnvelopeOnOff(false, &mix_verb_wet_l);
+    freeverbs.roomsize(0);
+    freeverbs.damping(0);
 }
 
 
@@ -326,7 +404,8 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                     break;
                 case 4:
                     // ADSR - modulation, attack
-                    ccEnvelope->attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
+                    env_pitch.attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
+                    env_filter.attack(static_cast<float>(8000.0 * ccValue + 15.0));   // min 15ms to 8 sec
 //                    Serial.print("4 - Value change: ");
 //                    Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
                     break;
@@ -334,19 +413,22 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                     // ADSR - modulation, decay
                     // Serial.print("5 - Value change: ");
                     // Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
-                    ccEnvelope->decay(static_cast<float>(8000.0 * ccValue + 15.0));    // min 15ms to 8 sec
+                    env_pitch.decay(static_cast<float>(8000.0 * ccValue + 15.0));    // min 15ms to 8 sec
+                    env_filter.decay(static_cast<float>(8000.0 * ccValue + 15.0));    // min 15ms to 8 sec
                     break;
                 case 6:
                     // ADSR - modulation, sustain
                     // Serial.print("6 - Value change: ");
                     // Serial.println(ccValue);
-                    ccEnvelope->sustain(ccValue);  // 0 to 1
+                    env_pitch.sustain(ccValue);  // 0 to 1
+                    env_filter.sustain(ccValue);
                     break;
                 case 7:
                     // ADSR - modulation, release
                     // Serial.print("7 - Value change: ");
                     // Serial.println(static_cast<float>(8000.0 * ccValue + 15.0));
-                    ccEnvelope->release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
+                    env_pitch.release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
+                    env_filter.release(static_cast<float>(8000.0 * ccValue + 15.0));  // 15 ms to 8 sec
                     break;
                 default:
                     break;
@@ -428,11 +510,13 @@ void muxControlChange(int mux_no, int ch_no, int value) {
             switch (ch_no) {
                 case 0:
                     // lfo 1 depth
+                    LFO1.amplitude(ccValue);
                     // Serial.print("0 - Value change: ");
                     // Serial.println(ccValue);
                     break;
                 case 1:
                     // lfo 2 depth
+                    LFO2.amplitude(ccValue);
                     // Serial.print("1 - Value change: ");
                     // Serial.println(ccValue);
                     break;
@@ -444,16 +528,19 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                     break;
                 case 3:
                     // lpf resonance
+                    LPF.resonance(4 * ccValue + 0.7);  // 0.7 to 4.7
                     // Serial.print("3 - Value change: ");
                     // Serial.println(ccValue);
                     break;
                 case 4:
                     // lfo 1 speed
+                    LFO1.frequency(static_cast<float>(40 * ccValue)); // 0 to 40 Hz
                     // Serial.print("4 - Value change: ");
                     // Serial.println(ccValue);
                     break;
                 case 5:
                     // lfo 2 speed
+                    LFO2.frequency(static_cast<float>(40 * ccValue)); // 0 to 40 Hz
                     // Serial.print("5 - Value change: ");
                     // Serial.println(ccValue);
                     break;
@@ -465,6 +552,7 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                     break;
                 case 7:
                     // lpf cutoff
+                    LPF.frequency(10000 * ccValue);   // 0 to 10kHz
                     // Serial.print("7 - Value change: ");
                     // Serial.println(ccValue);
                     break;
@@ -477,28 +565,48 @@ void muxControlChange(int mux_no, int ch_no, int value) {
             // fourth multiplexer controls - fx
             switch (ch_no) {
                 case 0:
+                    // reverb dampening
+                    freeverbs.damping(ccValue); // 0 to 1
                     // Serial.print("0 - Value change: ");
                     // Serial.println(ccValue);
                     break;
                 case 1:
+                    // reverb wet dry
+                    mix_verb_wet_l.gain(0, 1 - ccValue);
+                    mix_verb_wet_l.gain(1, ccValue);
+                    mix_verb_wet_r.gain(0, 1- ccValue);
+                    mix_verb_wet_r.gain(1, ccValue);
                     // Serial.print("1 - Value change: ");
                     // Serial.println(ccValue);
                     break;
-                case 3:
+                case 4:
+                    // reverb roomsize
+                    freeverbs.roomsize(ccValue); // 0 to 1
                     // Serial.print("2 - Value change: ");
                     // Serial.println(ccValue);
                     break;
-                case 4:
+
+                case 3:
+                    // delay wet
+                    mix_delay_wet.gain(0, 1 - ccValue);
+                    mix_delay_wet.gain(1, ccValue);
                     // Serial.print("3 - Value change: ");
                     // Serial.println(ccValue);
                     break;
                 case 6:
+                    // delay decay time max 1600 ms / 4 = 400 ms
+                    setDelayDecay(delayTaps, float(400 * ccValue + 1));
                     // Serial.print("4 - Value change: ");
                     // Serial.println(ccValue);
                     break;
                 case 7:
-                    // Serial.print("5 - Value change: ");
-                    // Serial.println(ccValue);
+                    // delay size
+                    delayTaps = map(int(ccValue*100), 0 , 100, 1, 4);
+                    Serial.print("5 - Value change: ");
+                    Serial.println(delayTaps);
+                    for (int delIdx=7; delIdx>delayTaps; delIdx--) {
+                        delay_fx.disable(delIdx);
+                    }
                     break;
                 default:
                     break;
@@ -532,11 +640,15 @@ void playNote(const Note note2play) {
     setOsc(note2play, &octave, &subOsc2, &subOsc3);
     // start envelopes
     ADSR_vol.noteOn();
+    env_pitch.noteOn();
+    env_filter.noteOn();
 }
 
 void stopNote() {
     // stop envelopes
     ADSR_vol.noteOff();
+    env_pitch.noteOff();
+    env_filter.noteOff();
 }
 
 // identifies note to play
@@ -654,21 +766,17 @@ void switchDioControlChange(const unsigned int * timingInterval, const unsigned 
         // check enevlope switch
         // left
         if (dioComp[2] == 0 && dioState[2] != dioComp[2]) {
-            ccEnvelope = &env_filter;
-            setEnvelopeDefault(&env_pitch);
-            setEnvelopeDefault(&env_off);
+            setEnvelopeOnOff(true, &env_filter_onoff);
+            setEnvelopeOnOff(false, &env_pitch_onoff);
         }
-
         //right
         else if (dioComp[3] == 0 && dioState[3] != dioComp[3]) {
-            ccEnvelope = &env_pitch;
-            setEnvelopeDefault(&env_filter);
-            setEnvelopeDefault(&env_off);
+            setEnvelopeOnOff(false, &env_filter_onoff);
+            setEnvelopeOnOff(true, &env_pitch_onoff);
         }
-        else {
-            ccEnvelope = &env_off;
-            setEnvelopeDefault(&env_filter);
-            setEnvelopeDefault(&env_pitch);
+        else if (dioComp[2] == 1 && dioComp[3] == 1 && (dioComp[3] != dioState[3] || dioComp[2] != dioState[2])){
+            setEnvelopeOnOff(false, &env_filter_onoff);
+            setEnvelopeOnOff(false, &env_pitch_onoff);
         }
         dioState[2] = dioComp[2];
         dioState[3] = dioComp[3];
@@ -710,7 +818,18 @@ void aioControlChange() {
     // make this timing dependent?
     vol = static_cast<float>(analogRead(A1)) / static_cast<float>(RES_RANGE);
     Volume.gain(vol);
-    // amplitude modulation with successive calls (self build LFO ) to volume gain
+
+    // ring modulator
+    ringDepth = static_cast<float>(analogRead(analogPotPins[4])) / static_cast<float>(RES_RANGE); // 0 to 1
+    ringSpeed = static_cast<float>(analogRead(analogPotPins[3]));   // @ 8 bit ~ 0 to 250
+    ringWet = static_cast<float>(analogRead(analogPotPins[2])) / static_cast<float>(RES_RANGE);  // 0 to 1
+    // depth
+    LFO_ring.amplitude(float(0.9 * ringDepth + 0.1)); // make not drop to 0 for wet pot to make more sense
+    // speed
+    LFO_ring.frequency(ringSpeed);
+    // wet
+    mix_ring_wet.gain(0, 1 - ringWet);
+    mix_ring_wet.gain(1, ringWet);
 }
 
 void muxReadUpdate(const bool setRead, const int setChannel) {
@@ -771,7 +890,7 @@ void fancyOctLightsSetup() {
     int lightsSetList[9] = {0,1,2,1,0,-1,-2,-1,0};
     for (auto togIdx : lightsSetList) {
         setOctToggleLed(togIdx);
-        delay(300);
+        delay(200);
     }
 }
 /**
@@ -789,7 +908,7 @@ void setup()
     init_mcps();
 
     Serial.println("___ALLOCATE___");
-    AudioMemory(200);
+    AudioMemory(670);
     sgtl5000_1.enable();
     sgtl5000_1.volume(0.5);
 
@@ -832,4 +951,6 @@ void loop()
 
     switchDioControlChange(&UPDATE_INTERVAL_2, 670);
     aioControlChange();
+    Serial.print(" max memory usage: ");
+    Serial.println(AudioMemoryUsageMax());
 }
