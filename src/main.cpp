@@ -5,6 +5,7 @@
 #include "note.h"
 #include "mux.h"
 #include <MIDI.h>
+#include <Bounce.h>
 
 /**
  * Global variables
@@ -39,6 +40,7 @@ elapsedMillis SYNC_TIMER;
 u_int8_t dioRead = 0;
 u_int8_t dioState[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 u_int8_t dioComp[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+Bounce tempoTap = Bounce(36, 10);
 
 bool toggleLedSync = false;
 
@@ -54,6 +56,8 @@ float detune = 0.0;
 int octave = 0;
 int subOsc2 = 0;
 int subOsc3 = 0;
+u_int8_t subState[4] = {0, 0, 0, 0};
+u_int8_t subComp[4] = {0, 0, 0, 0};
 // modulation
 const int modOctRange = 2;  // number of octaves frequency modulation can maximally shift the wave
 const int modPhRange = 180;  // modulation signal can change the phase that many degrees max
@@ -65,7 +69,7 @@ float ringDepth = 0;
 float ringSpeed = 0;
 float ringWet = 0;
 // delay
-unsigned int delayTaps = 1;
+int delayTaps = 1;
 
 // create array of notes and current note
 Note notes[NO_OF_KEYS];
@@ -208,14 +212,14 @@ void init_MCPs() {
     // B register
     Wire.beginTransmission(MCP_KEYS_ADDR);
     Wire.write(0x01);
-    // pin assignment -> input oct toggle 12, input env switch 34, input tempo switch 56, output tempo led 7, input tempo tap 8
-    // ie: 10111111
-    Wire.write(0xbf);
+    // pin assignment -> input oct toggle 12, input env switch 34, input 56 sub osc2, input sub osc3 78
+    // ie: 11111111
+    Wire.write(0xff);
     Wire.endTransmission();
     // need pull up
     Wire.beginTransmission(MCP_KEYS_ADDR);
     Wire.write(0x0d);
-    Wire.write(0xbf);
+    Wire.write(0xff);
     Wire.endTransmission();
     // all other default to input (ie. A register)
 
@@ -223,14 +227,8 @@ void init_MCPs() {
     // set A register
     Wire.beginTransmission(MCP_DIO_ADDR);
     Wire.write(0x00); // IODIR A register
-    // first 5 are output for led control, last 3 are input from sub switches -> 00000111 = 0x03
-    Wire.write(0x03); // set B output pins
-    Wire.endTransmission();
-
-    Wire.beginTransmission(MCP_DIO_ADDR);
-    Wire.write(0x0c); // pull up register A
-    // pull up first 3 pins -> 00000111 -> 0x03
-    Wire.write(0x03);
+    //  all are output for led controls
+    Wire.write(0x00); // set B output pins
     Wire.endTransmission();
 
     // set oct toggle high:
@@ -243,15 +241,10 @@ void init_MCPs() {
     // set B register
     Wire.beginTransmission(MCP_DIO_ADDR);
     Wire.write(0x01); //IODIR B Register
-    // first 3 are output pins for mux addressing, last pin is input from sub switch -> 10000000 = 0x80
-    Wire.write(0x80);
+    // first 3 are output pins for mux addressing
+    Wire.write(0x00);
     Wire.endTransmission();
 
-    Wire.beginTransmission(MCP_DIO_ADDR);
-    Wire.write(0x0d); // pull up register B
-    // pull up last pin -> 10000000 -> 0x80
-    Wire.write(0x80);
-    Wire.endTransmission();
 }
 
 // initialize note struct -> give correct note numbers and velocities to elements
@@ -541,11 +534,13 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                     break;
                 case 7:
                     // delay size
-                    delayTaps = map(int(ccValue*100), 0 , 100, 1, 4);
-                    Serial.print("5 - Value change: ");
-                    Serial.println(delayTaps);
-                    for (unsigned int delIdx=7; delIdx>delayTaps; delIdx--) {
-                        delay_fx.disable(delIdx);
+                    if (delayTaps != map(int(ccValue*100), 0 , 100, 1, 4)) {
+                        delayTaps = map(int(ccValue*100), 0 , 100, 1, 4);
+                        Serial.print("5 - Value change: ");
+                        Serial.println(delayTaps);
+                        for (int delIdx=7; delIdx>delayTaps; delIdx--) {
+                            delay_fx.disable(delIdx);
+                        }
                     }
                     break;
                 default:
@@ -559,7 +554,7 @@ void muxControlChange(int mux_no, int ch_no, int value) {
 }
 
 // set frequencies, play notes
-void setOsc(const Note & note2set, const int * octave2set, const int * sub1, const int * sub2) {
+void setOsc(const Note note2set, const int * octave2set, const int * sub1, const int * sub2) {
     // calculate freq from midi note and set
     OSC1.frequency(midi2freq(*octave2set * 12 + note2set.get_note()));
     OSC2.frequency(midi2freq(*octave2set * 12 + *sub1 * 12 + note2set.get_note()));
@@ -662,93 +657,148 @@ void setOctToggleLed(int toggleValue) {
     Wire.endTransmission();
 }
 
-void switchDioControlChange(const unsigned int * timingInterval, const unsigned int timingSync) {
-    if (UPDATE_TIMER_2 >= *timingInterval) {
-        // read pins
-        Wire.beginTransmission(MCP_KEYS_ADDR);
-        Wire.write(0x13); // bank B
-        Wire.endTransmission();
-        Wire.requestFrom(MCP_KEYS_ADDR, 1u); // request 1 byte
-        dioRead = Wire.read();
+void switchDioControlChange(const unsigned int timingSync) {
+    // read pins
+    Wire.beginTransmission(MCP_KEYS_ADDR);
+    Wire.write(0x13); // bank B
+    Wire.endTransmission();
+    Wire.requestFrom(MCP_KEYS_ADDR, 1u); // request 1 byte
+    dioRead = Wire.read();
 
-        for (unsigned char & dioIdx : dioComp) {
-            dioIdx = dioRead % 2;
-            dioRead = dioRead >> 1;
-        }
-        // check octave toggle
-        // left
-        if (dioComp[0] != dioState[0]) {
-            // left oct toggle changed
-            if (dioComp[0] == 0) {
-                // switch on
-                if (octave < 2) {
-                    // raise octave by one
-                    octave++;
-                    setOctToggleLed(octave);
-                }
-            }
-            dioState[0] = dioComp[0];
-        }
-        // right
-        if (dioComp[1] != dioState[1]) {
-            // left oct toggle changed
-            if (dioComp[1] == 0) {
-                // switch on
-                if (octave > -2) {
-                    // lower octave by 1
-                    octave--;
-                    setOctToggleLed(octave);
-                }
-            }
-            dioState[1] = dioComp[1];
-        }
-
-        // check envelope switch
-        // left
-        if (dioComp[2] == 0 && dioState[2] != dioComp[2]) {
-            setEffectMixOnOff(true, &env_filter_onoff);
-            setEffectMixOnOff(false, &env_pitch_onoff);
-        }
-        //right
-        else if (dioComp[3] == 0 && dioState[3] != dioComp[3]) {
-            setEffectMixOnOff(false, &env_filter_onoff);
-            setEffectMixOnOff(true, &env_pitch_onoff);
-        }
-        else if (dioComp[2] == 1 && dioComp[3] == 1 && (dioComp[3] != dioState[3] || dioComp[2] != dioState[2])){
-            setEffectMixOnOff(false, &env_filter_onoff);
-            setEffectMixOnOff(false, &env_pitch_onoff);
-        }
-        dioState[2] = dioComp[2];
-        dioState[3] = dioComp[3];
-
-        // check tempo switch
-        if (dioComp[4] == 0 && dioComp[4] != dioState[4]) {
-            // sync to midi
-        }
-        else if (dioComp[5] == 0 && dioComp[5]!= dioState[5]) {
-            // sync to knob
-        }
-        else {
-            // sync to tap
-        }
-        dioState[4] = dioComp[4];
-        dioState[5] = dioComp[5];
-        dioState[7] = dioComp[7];
+    for (unsigned char & dioIdx : dioComp) {
+        dioIdx = dioRead % 2;
+        dioRead = dioRead >> 1;
     }
+    // check octave toggle
+    // left
+    if (dioComp[0] != dioState[0]) {
+        // left oct toggle changed
+        if (dioComp[0] == 0) {
+            // switch on
+            if (octave < 2) {
+                // raise octave by one
+                octave++;
+                setOctToggleLed(octave);
+                setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+            }
+        }
+        dioState[0] = dioComp[0];
+    }
+    // right
+    if (dioComp[1] != dioState[1]) {
+        // left oct toggle changed
+        if (dioComp[1] == 0) {
+            // switch on
+            if (octave > -2) {
+                // lower octave by 1
+                octave--;
+                setOctToggleLed(octave);
+
+                setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+            }
+        }
+        dioState[1] = dioComp[1];
+    }
+
+    // check envelope switch
+    // left
+    if (dioComp[2] == 0 && dioState[2] != dioComp[2]) {
+        setEffectMixOnOff(true, &env_filter_onoff);
+        setEffectMixOnOff(false, &env_pitch_onoff);
+    }
+    //right
+    else if (dioComp[3] == 0 && dioState[3] != dioComp[3]) {
+        setEffectMixOnOff(false, &env_filter_onoff);
+        setEffectMixOnOff(true, &env_pitch_onoff);
+    }
+    else if (dioComp[2] == 1 && dioComp[3] == 1 && (dioComp[3] != dioState[3] || dioComp[2] != dioState[2])){
+        setEffectMixOnOff(false, &env_filter_onoff);
+        setEffectMixOnOff(false, &env_pitch_onoff);
+    }
+    dioState[2] = dioComp[2];
+    dioState[3] = dioComp[3];
+
+    // check sub switches
+    // sub 3
+    if (dioComp[4] == 0) {
+        // osc2 sub left
+        if (subOsc3 != -1) {
+            subOsc3 = -1;
+            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+        };
+    }
+    else if (dioComp[5] == 0) {
+        // osc2 sub off
+        if (subOsc3 != 0) {
+            subOsc3 = 0;
+            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+        }
+    }
+    else {
+        // sub 3 right
+        if (subOsc3 != 1) {
+            subOsc3 = 1;
+            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+        }
+    }
+    // sub 2
+    if (dioComp[6] == 0) {
+        // osc2 sub off
+        if (subOsc2 != 0) {
+            subOsc2 = 0;
+            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+        }
+    }
+    else if (dioComp[7] == 0) {
+        // osc2 sub right
+        if (subOsc2 != 1) {
+            subOsc2 = 1;
+            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+        }
+    }
+    else {
+        // sub 2 left
+        if (subOsc2 != -1) {
+            subOsc2 = -1;
+            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+        }
+    }
+
     // sync LED switch
+    // LED at last pin of A bank DIO MCP
+    int stateToWrite = 0x20;
+    int octaveState = octave;
+
     if (SYNC_TIMER >= timingSync) {
         SYNC_TIMER = 0;
-        Wire.beginTransmission(MCP_KEYS_ADDR);
-        Wire.write(0x13); // bank B
-        Wire.write(0x40); // pin 7 high
+        while (octaveState>0) {
+            stateToWrite = stateToWrite << 1;
+            octaveState--;
+        }
+        while (octaveState<0) {
+            stateToWrite = stateToWrite >> 1;
+            octaveState++;
+        }
+        stateToWrite += 1;
+        Wire.beginTransmission(MCP_DIO_ADDR);
+        Wire.write(0x12);
+        Wire.write(stateToWrite);
         Wire.endTransmission();
         toggleLedSync = true;
     }
     if (SYNC_TIMER >= 50 && toggleLedSync) {
         // blink light for 50 ms
-        Wire.beginTransmission(MCP_KEYS_ADDR);
-        Wire.write(0x13); // bank B
-        Wire.write(0x00); // pin all low
+        while (octaveState>0) {
+            stateToWrite = stateToWrite << 1;
+            octaveState--;
+        }
+        while (octaveState<0) {
+            stateToWrite = stateToWrite >> 1;
+            octaveState++;
+        }
+        Wire.beginTransmission(MCP_DIO_ADDR);
+        Wire.write(0x12);
+        Wire.write(stateToWrite);
         Wire.endTransmission();
         toggleLedSync = false;
     }
@@ -770,6 +820,28 @@ void aioControlChange() {
     // wet
     mix_ring_wet.gain(0, 1 - ringWet);
     mix_ring_wet.gain(1, ringWet);
+    // mod pot
+
+    // rest digital ins, pins 36,37,38
+    // tempo tap
+    tempoTap.update();
+    if (tempoTap.fallingEdge()) {
+        // tap tempo
+    }
+    // tempo switch
+    if (digitalRead(37) == LOW) {
+        // left
+        // sync tempo to midi
+    }
+    else if (digitalRead(38) == LOW) {
+        // right
+        // sync tempo to tap
+    }
+    else {
+        // sync tempo to pots (vca)
+    }
+
+
 }
 
 void muxReadUpdate(const bool setRead, const int setChannel) {
@@ -875,6 +947,11 @@ void fancyOctLightsSetup() {
  */
 void setup()
 {
+    Serial.println("___ALLOCATE___");
+    AudioMemory(670);
+    sgtl5000_1.enable();
+    sgtl5000_1.volume(0.5);
+
     // setup hardware
     Serial.begin(9600);
     Serial.println("___SETUP HARDWARE___");
@@ -882,22 +959,21 @@ void setup()
     Wire.begin(I2C_MASTER, MCP_DIO_ADDR, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000);
     init_midi();
 
-    Serial.println("___INIT MCPs___");
-    init_MCPs();
-
-    Serial.println("___ALLOCATE___");
-    AudioMemory(670);
-    sgtl5000_1.enable();
-    sgtl5000_1.volume(0.5);
-
-    // ADCs
+    // A ins
     pinMode(A13, INPUT);
     pinMode(A14, INPUT);
     pinMode(A15, INPUT);        // pin no 34
     pinMode(A16, INPUT);       // pin no 35
+    // D ins
+    pinMode(36, INPUT_PULLUP);
+    pinMode(37, INPUT_PULLUP);
+    pinMode(38, INPUT_PULLUP);
 
     analogReadResolution(READ_RES_BIT_DEPTH);  // also here, 12 bit would mean 0 - 4096 value range in analog read
     analogReadAveraging(8);
+
+    Serial.println("___INIT MCPs___");
+    init_MCPs();
 
     Serial.println("___INIT KEYS___");
     // initialize keys
@@ -930,7 +1006,7 @@ void loop()
     // handle note objects
     note_update();
 
-    switchDioControlChange(&UPDATE_INTERVAL_2, 670);
+    switchDioControlChange(670);
     aioControlChange();
 //    Serial.print(" max memory usage: ");
 //    Serial.println(AudioMemoryUsageMax());
