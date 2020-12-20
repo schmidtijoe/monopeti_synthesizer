@@ -33,8 +33,6 @@ constexpr u_int8_t NO_OF_MODULES = 4;
 int AIN_PINS_MUX[NO_OF_MODULES] = {35, 34, 33, 32};
 
 // digital IO
-elapsedMillis UPDATE_TIMER_2;  // no need to do this every loop
-unsigned int UPDATE_INTERVAL_2 = 5;  // [ms]
 elapsedMillis SYNC_TIMER;
 // pins -> have to switch to MCP keys IO capacity here
 u_int8_t dioRead = 0;
@@ -56,8 +54,6 @@ float detune = 0.0;
 int octave = 0;
 int subOsc2 = 0;
 int subOsc3 = 0;
-u_int8_t subState[4] = {0, 0, 0, 0};
-u_int8_t subComp[4] = {0, 0, 0, 0};
 // modulation
 const int modOctRange = 2;  // number of octaves frequency modulation can maximally shift the wave
 const int modPhRange = 180;  // modulation signal can change the phase that many degrees max
@@ -70,6 +66,10 @@ float ringSpeed = 0;
 float ringWet = 0;
 // delay
 int delayTaps = 1;
+// portamento
+elapsedMillis portamentoTIMER;
+float portamentoTime = 10;  // ms
+float activeFreq = 440;
 
 // create array of notes and current note
 Note notes[NO_OF_KEYS];
@@ -554,11 +554,14 @@ void muxControlChange(int mux_no, int ch_no, int value) {
 }
 
 // set frequencies, play notes
-void setOsc(const Note note2set, const int * octave2set, const int * sub1, const int * sub2) {
+void setOsc(const float freq2set, const int * octave2set, const int * sub1, const int * sub2) {
     // calculate freq from midi note and set
-    OSC1.frequency(midi2freq(*octave2set * 12 + note2set.get_note()));
-    OSC2.frequency(midi2freq(*octave2set * 12 + *sub1 * 12 + note2set.get_note()));
-    OSC3.frequency(midi2freq(*octave2set * 12 + *sub2 * 12 + note2set.get_note()));
+    OSC1.frequency(freq2set * static_cast<float>(*octave2set * 2));
+    OSC2.frequency(freq2set * static_cast<float>((*octave2set * 2 + *sub1 * 2)));
+    OSC3.frequency(freq2set * static_cast<float>((*octave2set * 2 + *sub2 * 2)));
+}
+
+void setVelocity(const Note note2set) {
     // set velocity
     if (note2set.get_velocity() == 127) {
         vel_change_high.fadeIn(fadeTime);
@@ -570,9 +573,29 @@ void setOsc(const Note note2set, const int * octave2set, const int * sub1, const
     }
 }
 
-void playNote(const Note note2play) {
+void portamento() {
+    float timeInc;
+    float pitchShift;
+    float desiredFreq = midi2freq(CURRENT_NOTE.get_note());
+    if (CURRENT_NOTE.isPressed()) {
+        if (abs(activeFreq - desiredFreq) > 0.05) {
+            timeInc = portamentoTime / static_cast<float>(portamentoTIMER);
+            pitchShift = (desiredFreq - activeFreq) / timeInc;
+            activeFreq = activeFreq + pitchShift;
+            Serial.print("active Frequency: ");
+            Serial.println(activeFreq);
+            // reset osc frequencies
+            setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
+            portamentoTIMER = 0;
+        }
+    }
+}
+
+void playNote() {
     // set OSCs
-    setOsc(note2play, &octave, &subOsc2, &subOsc3);
+    portamento();
+    //const Note note2play
+    // setOsc(note2play, &octave, &subOsc2, &subOsc3);
     // start envelopes
     ADSR_vol.noteOn();
     env_pitch.noteOn();
@@ -601,17 +624,20 @@ void note_update() {
      * what happens with velocity changes?                          -> no play events
      */
     for (const auto &note: notes) {
+        // new note pressed
         if (note.isPressed() && (note.getTime() > CURRENT_NOTE.getTime())) {
-            setOsc(note, &octave, &subOsc2, &subOsc3);
-            if (!(note.get_note() == CURRENT_NOTE.get_note() && CURRENT_NOTE.isPressed())) {
-                playNote(note);
-            }
+            setVelocity(note);
+            // setOsc(note, &octave, &subOsc2, &subOsc3);
             CURRENT_NOTE = note;
+            if (!(note.get_note() == CURRENT_NOTE.get_note() && CURRENT_NOTE.isPressed())) {
+                playNote();
+            }
         }
 
         // in case were in search mode, ie toggled loop to find other pressed notes
         if (note.isPressed() && TOGGLE_LOOP) {
-            setOsc(note, &octave, &subOsc2, &subOsc3);      // changes pitch and velocity,
+            setVelocity(note);
+            // setOsc(note, &octave, &subOsc2, &subOsc3);      // changes pitch and velocity,
             CURRENT_NOTE = note;
             // reset toggle
             TOGGLE_LOOP = false;
@@ -679,7 +705,7 @@ void switchDioControlChange(const unsigned int timingSync) {
                 // raise octave by one
                 octave++;
                 setOctToggleLed(octave);
-                setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+                setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
             }
         }
         dioState[0] = dioComp[0];
@@ -694,7 +720,7 @@ void switchDioControlChange(const unsigned int timingSync) {
                 octave--;
                 setOctToggleLed(octave);
 
-                setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+                setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
             }
         }
         dioState[1] = dioComp[1];
@@ -724,21 +750,21 @@ void switchDioControlChange(const unsigned int timingSync) {
         // osc2 sub left
         if (subOsc3 != -1) {
             subOsc3 = -1;
-            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+            setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
         };
     }
     else if (dioComp[5] == 0) {
         // osc2 sub off
         if (subOsc3 != 0) {
             subOsc3 = 0;
-            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+            setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
         }
     }
     else {
         // sub 3 right
         if (subOsc3 != 1) {
             subOsc3 = 1;
-            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+            setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
         }
     }
     // sub 2
@@ -746,21 +772,21 @@ void switchDioControlChange(const unsigned int timingSync) {
         // osc2 sub off
         if (subOsc2 != 0) {
             subOsc2 = 0;
-            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+            setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
         }
     }
     else if (dioComp[7] == 0) {
         // osc2 sub right
         if (subOsc2 != 1) {
             subOsc2 = 1;
-            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+            setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
         }
     }
     else {
         // sub 2 left
         if (subOsc2 != -1) {
             subOsc2 = -1;
-            setOsc(CURRENT_NOTE, &octave, &subOsc2, &subOsc3);
+            setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
         }
     }
 
@@ -941,7 +967,6 @@ void fancyOctLightsSetup() {
         delay(200);
     }
 }
-
 /**
  * program
  */
@@ -1005,7 +1030,7 @@ void loop()
     MIDI.read();
     // handle note objects
     note_update();
-
+    portamento();
     switchDioControlChange(670);
     aioControlChange();
 //    Serial.print(" max memory usage: ");
