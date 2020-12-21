@@ -66,12 +66,15 @@ float ringSpeed = 0;
 float ringWet = 0;
 // delay
 int delayTaps = 1;
+float delayTime;
 // portamento
 unsigned int portamentoCountTo = 2;  // set number of loops to update portamento
 float activeFreq = 440;
 float desiredFreq = 440;
 float freqInc = 0;
 unsigned int portamentoCounter = 0;
+// mod
+unsigned int modValue = 0;
 // create array of notes and current note
 Note notes[NO_OF_KEYS];
 static Note CURRENT_NOTE;
@@ -355,6 +358,11 @@ void init_sound() {
     setEffectMixOnOff(false, &mix_verb_wet_l);
     freeverbs.roomsize(0);
     freeverbs.damping(0);
+
+    // combine
+    setEffectMixOnOff(false, &mix_combine_wet);
+    combine.setCombineMode(1);
+    combine_LFO.begin(0.8, 5, WAVEFORM_TRIANGLE_VARIABLE);
 }
 
 /** Multiplexer, setting, reading
@@ -531,6 +539,7 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                     break;
                 case 6:
                     // delay decay time max 1600 ms / 4 = 400 ms
+                    delayTime = static_cast<float>(400 * ccValue + 1);
                     setDelayDecay(delayTaps, float(400 * ccValue + 1));
                     break;
                 case 7:
@@ -542,6 +551,7 @@ void muxControlChange(int mux_no, int ch_no, int value) {
                         for (int delIdx=7; delIdx>delayTaps; delIdx--) {
                             delay_fx.disable(delIdx);
                         }
+                        setDelayDecay(delayTaps, float(400 * ccValue + 1));
                     }
                     break;
                 default:
@@ -845,6 +855,7 @@ void switchDioControlChange(const unsigned int timingSync) {
 
 void aioControlChange() {
     unsigned int portaComp;
+    unsigned int modComp;
     // make this timing dependent?
     vol = static_cast<float>(analogRead(A1)) / static_cast<float>(RES_RANGE);
     Volume.gain(vol);
@@ -866,6 +877,12 @@ void aioControlChange() {
         portamentoCountTo = portaComp;
     }
     // mod pot
+    modComp =  analogRead(analogPotPins[0]);
+    if (modComp != modValue) {
+        modValue = modComp;
+        mix_combine_wet.gain(0, 1 - static_cast<float>(9 * modValue) / static_cast<float>(10 * RES_RANGE));
+        mix_combine_wet.gain(1, static_cast<float>(9 * modValue) / static_cast<float>(10 * RES_RANGE));
+    }
 
     // rest digital ins, pins 36,37,38
     // tempo tap
