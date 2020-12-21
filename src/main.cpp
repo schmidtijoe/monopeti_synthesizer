@@ -67,10 +67,11 @@ float ringWet = 0;
 // delay
 int delayTaps = 1;
 // portamento
-elapsedMillis portamentoTIMER;
-float portamentoTime = 10;  // ms
+unsigned int portamentoCountTo = 2;  // set number of loops to update portamento
 float activeFreq = 440;
-
+float desiredFreq = 440;
+float freqInc = 0;
+unsigned int portamentoCounter = 0;
 // create array of notes and current note
 Note notes[NO_OF_KEYS];
 static Note CURRENT_NOTE;
@@ -556,9 +557,9 @@ void muxControlChange(int mux_no, int ch_no, int value) {
 // set frequencies, play notes
 void setOsc(const float freq2set, const int * octave2set, const int * sub1, const int * sub2) {
     // calculate freq from midi note and set
-    OSC1.frequency(freq2set * static_cast<float>(*octave2set * 2));
-    OSC2.frequency(freq2set * static_cast<float>((*octave2set * 2 + *sub1 * 2)));
-    OSC3.frequency(freq2set * static_cast<float>((*octave2set * 2 + *sub2 * 2)));
+    OSC1.frequency(freq2set * static_cast<float>(pow(2,*octave2set)));
+    OSC2.frequency(freq2set * static_cast<float>(pow(2, *octave2set + *sub1)));
+    OSC3.frequency(freq2set * static_cast<float>(pow(2, *octave2set + *sub2)));
 }
 
 void setVelocity(const Note note2set) {
@@ -573,27 +574,43 @@ void setVelocity(const Note note2set) {
     }
 }
 
-void portamento() {
-    float timeInc;
-    float pitchShift;
-    float desiredFreq = midi2freq(CURRENT_NOTE.get_note());
-    if (CURRENT_NOTE.isPressed()) {
-        if (abs(activeFreq - desiredFreq) > 0.05) {
-            timeInc = portamentoTime / static_cast<float>(portamentoTIMER);
-            pitchShift = (desiredFreq - activeFreq) / timeInc;
-            activeFreq = activeFreq + pitchShift;
-            Serial.print("active Frequency: ");
-            Serial.println(activeFreq);
-            // reset osc frequencies
+void portamentoStart(Note note2set) {
+    // sets Shift increment and counter
+    desiredFreq = midi2freq(note2set.get_note());
+    Serial.print("desired Frequency: ");
+    Serial.println(desiredFreq);
+    portamentoCounter = 0;
+    if (portamentoCountTo < 1) {
+        activeFreq = desiredFreq;
+        freqInc = 0;
+    }
+    else {
+        Serial.print("count to: ");
+        Serial.println(portamentoCountTo);
+        freqInc = static_cast<float> (desiredFreq - activeFreq) / static_cast<float>(portamentoCountTo);
+    }
+    setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
+}
+
+void portamentoUpdate() {
+    if (portamentoCounter<=portamentoCountTo) {
+        activeFreq += freqInc;
+        portamentoCounter++;
+        setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
+        Serial.print("active freq: ");
+        Serial.println(activeFreq);
+    }
+    else {
+        if (activeFreq != desiredFreq) {
+            activeFreq = desiredFreq;
             setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
-            portamentoTIMER = 0;
         }
     }
 }
 
-void playNote() {
+void playNote(Note note2play) {
     // set OSCs
-    portamento();
+    portamentoStart(note2play);
     //const Note note2play
     // setOsc(note2play, &octave, &subOsc2, &subOsc3);
     // start envelopes
@@ -628,16 +645,17 @@ void note_update() {
         if (note.isPressed() && (note.getTime() > CURRENT_NOTE.getTime())) {
             setVelocity(note);
             // setOsc(note, &octave, &subOsc2, &subOsc3);
-            CURRENT_NOTE = note;
             if (!(note.get_note() == CURRENT_NOTE.get_note() && CURRENT_NOTE.isPressed())) {
-                playNote();
+                playNote(note);
             }
+            CURRENT_NOTE = note;
         }
 
         // in case were in search mode, ie toggled loop to find other pressed notes
         if (note.isPressed() && TOGGLE_LOOP) {
             setVelocity(note);
             // setOsc(note, &octave, &subOsc2, &subOsc3);      // changes pitch and velocity,
+            portamentoStart(note);
             CURRENT_NOTE = note;
             // reset toggle
             TOGGLE_LOOP = false;
@@ -831,6 +849,7 @@ void switchDioControlChange(const unsigned int timingSync) {
 }
 
 void aioControlChange() {
+    unsigned int portaComp;
     // make this timing dependent?
     vol = static_cast<float>(analogRead(A1)) / static_cast<float>(RES_RANGE);
     Volume.gain(vol);
@@ -846,6 +865,11 @@ void aioControlChange() {
     // wet
     mix_ring_wet.gain(0, 1 - ringWet);
     mix_ring_wet.gain(1, ringWet);
+    // portamento
+    portaComp = analogRead(analogPotPins[1]) -1;
+    if (portaComp != portamentoCountTo) {
+        portamentoCountTo = portaComp;
+    }
     // mod pot
 
     // rest digital ins, pins 36,37,38
@@ -1030,7 +1054,7 @@ void loop()
     MIDI.read();
     // handle note objects
     note_update();
-    portamento();
+    portamentoUpdate();
     switchDioControlChange(670);
     aioControlChange();
 //    Serial.print(" max memory usage: ");
