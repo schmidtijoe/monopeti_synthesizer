@@ -576,17 +576,14 @@ void setVelocity(const Note note2set) {
 
 void portamentoStart(Note note2set) {
     // sets Shift increment and counter
+    if (!note2set.isPressed()) return;
     desiredFreq = midi2freq(note2set.get_note());
-    Serial.print("desired Frequency: ");
-    Serial.println(desiredFreq);
     portamentoCounter = 0;
     if (portamentoCountTo < 1) {
         activeFreq = desiredFreq;
         freqInc = 0;
     }
     else {
-        Serial.print("count to: ");
-        Serial.println(portamentoCountTo);
         freqInc = static_cast<float> (desiredFreq - activeFreq) / static_cast<float>(portamentoCountTo);
     }
     setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
@@ -597,8 +594,6 @@ void portamentoUpdate() {
         activeFreq += freqInc;
         portamentoCounter++;
         setOsc(activeFreq, &octave, &subOsc2, &subOsc3);
-        Serial.print("active freq: ");
-        Serial.println(activeFreq);
     }
     else {
         if (activeFreq != desiredFreq) {
